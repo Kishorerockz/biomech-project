@@ -1,5 +1,8 @@
 {
   "appId": "com.biomech.app",
   "appName": "BiomechApp",
-  "webDir": "dist"
+  "webDir": "dist",
+  "server": {
+    "cleartext": true
+  }
 }
