@@ -275,8 +275,8 @@ io.on("connection", (socket) => {
 /* ── Start ── */
 async function start() {
   await connectDB();
-  server.listen(PORT, () => {
-    console.log(`🚀  biomech-backend listening on http://localhost:${PORT}`);
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀  biomech-backend listening on http://0.0.0.0:${PORT}`);
     console.log(`🔌  Socket.io ready`);
   });
 }
