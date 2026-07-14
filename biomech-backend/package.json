@@ -1,0 +1,20 @@
+{
+  "name": "biomech-backend",
+  "version": "1.0.0",
+  "description": "Wearable IoT sports biomechanics backend – Express + MongoDB",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongoose": "^8.10.1",
+    "socket.io": "^4.8.3",
+    "uuid": "^11.1.0"
+  },
+  "keywords": [],
+  "license": "ISC"
+}

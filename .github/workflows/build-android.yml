@@ -1,0 +1,54 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: biomech-dashboard/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: ./biomech-dashboard
+        run: npm ci
+
+      - name: Build Web Dashboard
+        working-directory: ./biomech-dashboard
+        run: npm run build
+
+      - name: Capacitor Sync
+        working-directory: ./biomech-dashboard
+        run: npx cap sync android
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Make Gradle executable
+        working-directory: ./biomech-dashboard/android
+        run: chmod +x ./gradlew
+
+      - name: Build APK with Gradle
+        working-directory: ./biomech-dashboard/android
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: biomech-dashboard/android/app/build/outputs/apk/debug/app-debug.apk
