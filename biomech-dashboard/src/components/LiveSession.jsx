@@ -10,6 +10,8 @@ import {
   ReferenceLine,
 } from "recharts";
 import { socket } from "../lib/socket";
+import { Haptics, ImpactStyle } from "@capacitor/haptics";
+import { KeepAwake } from "@capacitor-community/keep-awake";
 
 const MAX_POINTS = 50;
 
@@ -25,6 +27,16 @@ export default function LiveSession() {
   const jumpTimeoutRef = useRef(null);
 
   useEffect(() => {
+    // Keep device awake during live session
+    const keepDeviceAwake = async () => {
+      try {
+        await KeepAwake.keepAwake();
+      } catch (e) {
+        console.log("KeepAwake not supported in browser, ignoring.");
+      }
+    };
+    keepDeviceAwake();
+
     // Connect socket
     socket.connect();
 
@@ -59,6 +71,9 @@ export default function LiveSession() {
     }
 
     function onJumpDetected(data) {
+      // Heavy mobile vibration on landing
+      try { Haptics.impact({ style: ImpactStyle.Heavy }); } catch (e) {}
+
       setLatestJump(data);
       setJumpHistory((prev) => [data, ...prev].slice(0, 10));
 
@@ -78,6 +93,12 @@ export default function LiveSession() {
     socket.on("jump_detected", onJumpDetected);
 
     return () => {
+      // Allow device to sleep again
+      const allowDeviceSleep = async () => {
+        try { await KeepAwake.allowSleep(); } catch (e) {}
+      };
+      allowDeviceSleep();
+
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.off("dashboard_update", onDashboardUpdate);
