@@ -1,31 +1,58 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  ReferenceLine,
-} from "recharts";
+import { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence, useSpring, useMotionValue, useMotionValueEvent } from "motion/react";
 import { socket } from "../lib/socket";
+import HeroMetricCard from "./HeroMetricCard";
+import LiveWaveform from "./LiveWaveform";
 
-const MAX_POINTS = 50;
+const MAX_POINTS = 60;
+
+function AnimatedNumber({ value, isFloat = false }) {
+  const motionValue = useMotionValue(0);
+  const springValue = useSpring(motionValue, { damping: 50, stiffness: 200 });
+  const [display, setDisplay] = useState(value);
+
+  useEffect(() => {
+    motionValue.set(value);
+  }, [value, motionValue]);
+
+  useMotionValueEvent(springValue, "change", (latest) => {
+    if (isFloat) {
+      setDisplay(latest.toFixed(3));
+    } else {
+      setDisplay(Math.round(latest));
+    }
+  });
+
+  return <span>{display}</span>;
+}
 
 export default function LiveSession() {
   const [telemetryData, setTelemetryData] = useState([]);
   const [latestJump, setLatestJump] = useState(null);
   const [maxJumpHeight, setMaxJumpHeight] = useState(0);
+  const [totalJumpsCount, setTotalJumpsCount] = useState(0);
   const [jumpHistory, setJumpHistory] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [packetCount, setPacketCount] = useState(0);
   const [latestAccel, setLatestAccel] = useState(null);
+  const [latestRawAxes, setLatestRawAxes] = useState({ accel: { x: 0, y: 0, z: 1.0 }, gyro: { x: 0, y: 0, z: 0 } });
   const [latestBattery, setLatestBattery] = useState(null);
-  const jumpTimeoutRef = useRef(null);
+  const [activeChartMetric, setActiveChartMetric] = useState("processed");
+  const [calibrationNotice, setCalibrationNotice] = useState(false);
+  const chartDataRef = useRef([]);
+  const jumpFlashRef = useRef(null);
 
   useEffect(() => {
-    // Connect socket
+    // Throttle chart rendering to ~24Hz (41ms)
+    const interval = setInterval(() => {
+      if (chartDataRef.current.length > 0) {
+        setTelemetryData([...chartDataRef.current]);
+      }
+    }, 41);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     socket.connect();
 
     function onConnect() {
@@ -41,35 +68,45 @@ export default function LiveSession() {
       setLatestAccel(data.processedAccel);
       setLatestBattery(data.battery);
 
-      setTelemetryData((prev) => {
-        const next = [
-          ...prev,
-          {
-            time: new Date(data.timestamp).toLocaleTimeString("en-US", {
-              hour12: false,
-              minute: "2-digit",
-              second: "2-digit",
-            }),
-            accel: data.processedAccel,
-            timestamp: data.timestamp,
-          },
-        ];
-        return next.length > MAX_POINTS ? next.slice(-MAX_POINTS) : next;
+      if (data.accel && data.gyro) {
+        setLatestRawAxes({
+          accel: data.accel,
+          gyro: data.gyro,
+        });
+      }
+
+      const timestampFormatted = new Date(data.timestamp).toLocaleTimeString("en-US", {
+        hour12: false,
+        minute: "2-digit",
+        second: "2-digit",
       });
+
+      const nextPoint = {
+        time: timestampFormatted,
+        processed: data.processedAccel ?? 1.0,
+        accelZ: data.accel?.z ?? 1.0,
+        gyroX: data.gyro?.x ?? 0,
+        timestamp: data.timestamp,
+      };
+
+      const prev = chartDataRef.current;
+      const updated = [...prev, nextPoint];
+      chartDataRef.current = updated.length > MAX_POINTS ? updated.slice(-MAX_POINTS) : updated;
     }
 
     function onJumpDetected(data) {
       setLatestJump(data);
+      setTotalJumpsCount((c) => c + 1);
       setJumpHistory((prev) => [data, ...prev].slice(0, 10));
 
-      setMaxJumpHeight((prev) => {
-        if (data.heightCm > prev) return data.heightCm;
-        return prev;
-      });
+      setMaxJumpHeight((prev) => Math.max(prev, data.heightCm));
 
-      // Flash effect
-      if (jumpTimeoutRef.current) clearTimeout(jumpTimeoutRef.current);
-      jumpTimeoutRef.current = setTimeout(() => {}, 2000);
+      // Trigger visual flash
+      setCalibrationNotice(true);
+      if (jumpFlashRef.current) clearTimeout(jumpFlashRef.current);
+      jumpFlashRef.current = setTimeout(() => {
+        setCalibrationNotice(false);
+      }, 3000);
     }
 
     socket.on("connect", onConnect);
@@ -86,291 +123,235 @@ export default function LiveSession() {
     };
   }, []);
 
+  const getJumpRank = (height) => {
+    if (!height || height === 0) return { label: "Awaiting Jump", color: "text-gray-500", icon: "⏱️" };
+    if (height < 30) return { label: "Standard Hop", color: "text-amber-500", icon: "👟" };
+    if (height < 55) return { label: "Athletic Jump", color: "text-cyan-400", icon: "⚡" };
+    if (height < 75) return { label: "Pro Level Jump", color: "text-emerald-400", icon: "🚀" };
+    return { label: "Elite World Class", color: "text-purple-500", icon: "💥" };
+  };
+
+  const jumpRank = getJumpRank(maxJumpHeight);
+
   return (
-    <div className="animate-fade-in" style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-      {/* ── Connection Status ── */}
+    <div className="flex flex-col gap-4">
+      {/* ── Connection Banner ── */}
       {!isConnected && (
-        <div className="reconnecting-banner">
-          ⚡ Connecting to backend...
-        </div>
-      )}
-
-      {/* ── Hero Metrics Row ── */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: "1rem",
-        }}
-      >
-        {/* Max Jump Height — Hero Card */}
-        <div
-          className="stat-card animate-pulse-glow"
-          style={{
-            gridColumn: "span 1",
-            background:
-              "linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(6, 182, 212, 0.08) 100%)",
-            borderColor: "var(--accent-emerald)",
-            textAlign: "center",
-            padding: "2rem 1.5rem",
-          }}
-        >
-          <div
-            style={{
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.1em",
-              color: "var(--accent-emerald)",
-              marginBottom: "0.5rem",
-            }}
-          >
-            🏆 Max Jump Height
-          </div>
-          <div
-            className={maxJumpHeight > 0 ? "animate-count-up" : ""}
-            key={maxJumpHeight}
-            style={{
-              fontSize: "3rem",
-              fontWeight: 800,
-              color: "var(--accent-emerald)",
-              lineHeight: 1,
-            }}
-          >
-            {maxJumpHeight > 0 ? `${maxJumpHeight}` : "—"}
-          </div>
-          <div
-            style={{
-              fontSize: "0.875rem",
-              color: "var(--text-secondary)",
-              marginTop: "0.25rem",
-            }}
-          >
-            {maxJumpHeight > 0 ? "cm" : "Waiting for jumps..."}
-          </div>
-        </div>
-
-        {/* Live Accel */}
-        <div className="stat-card">
-          <div
-            style={{
-              fontSize: "0.7rem",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.1em",
-              color: "var(--accent-cyan)",
-              marginBottom: "0.5rem",
-            }}
-          >
-            📊 Current Accel
-          </div>
-          <div
-            style={{
-              fontSize: "2rem",
-              fontWeight: 700,
-              color: "var(--text-primary)",
-            }}
-          >
-            {latestAccel !== null ? `${latestAccel.toFixed(3)}` : "—"}
-          </div>
-          <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>g</div>
-        </div>
-
-        {/* Packets Received */}
-        <div className="stat-card">
-          <div
-            style={{
-              fontSize: "0.7rem",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.1em",
-              color: "var(--accent-violet)",
-              marginBottom: "0.5rem",
-            }}
-          >
-            📦 Packets
-          </div>
-          <div
-            style={{
-              fontSize: "2rem",
-              fontWeight: 700,
-              color: "var(--text-primary)",
-            }}
-          >
-            {packetCount}
-          </div>
-          <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-            received
-          </div>
-        </div>
-
-        {/* Battery */}
-        <div className="stat-card">
-          <div
-            style={{
-              fontSize: "0.7rem",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.1em",
-              color: "var(--accent-amber)",
-              marginBottom: "0.5rem",
-            }}
-          >
-            🔋 Battery
-          </div>
-          <div
-            style={{
-              fontSize: "2rem",
-              fontWeight: 700,
-              color:
-                latestBattery !== null && latestBattery < 20
-                  ? "var(--accent-rose)"
-                  : "var(--text-primary)",
-            }}
-          >
-            {latestBattery !== null ? `${latestBattery}%` : "—"}
-          </div>
-          <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-            {isConnected ? (
-              <span>
-                <span className="status-dot live" /> Connected
-              </span>
-            ) : (
-              <span>
-                <span className="status-dot offline" /> Offline
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Live Chart ── */}
-      <div className="chart-container">
         <div
           style={{
+            background: "linear-gradient(90deg, #ffb703, #fb8500)",
+            color: "#000",
+            padding: "0.75rem 1.25rem",
+            borderRadius: "var(--radius-md)",
+            fontWeight: 700,
+            fontSize: "0.875rem",
             display: "flex",
-            justifyContent: "space-between",
             alignItems: "center",
-            marginBottom: "1rem",
+            justifyContent: "space-between",
           }}
         >
-          <h3
+          <span>⚡ WebSocket Disconnected. Waiting for Backend Server on http://localhost:5000...</span>
+          <button
+            onClick={() => socket.connect()}
             style={{
-              fontSize: "1rem",
-              fontWeight: 600,
-              color: "var(--text-primary)",
-            }}
-          >
-            Live Acceleration (g)
-          </h3>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
+              background: "#000",
+              color: "#fff",
+              border: "none",
+              padding: "0.3rem 0.8rem",
+              borderRadius: "var(--radius-sm)",
               fontSize: "0.75rem",
-              color: "var(--text-muted)",
+              fontWeight: 700,
+              cursor: "pointer",
             }}
           >
-            <span className={`status-dot ${isConnected ? "live" : "offline"}`} />
-            {isConnected ? "LIVE" : "OFFLINE"}
-          </div>
-        </div>
-
-        <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={telemetryData}>
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="rgba(148, 163, 184, 0.08)"
-            />
-            <XAxis
-              dataKey="time"
-              stroke="var(--text-muted)"
-              fontSize={11}
-              tick={{ fill: "var(--text-muted)" }}
-            />
-            <YAxis
-              stroke="var(--text-muted)"
-              fontSize={11}
-              tick={{ fill: "var(--text-muted)" }}
-              domain={[0, 3.5]}
-            />
-            <Tooltip
-              contentStyle={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--text-primary)",
-                fontSize: "0.8rem",
-              }}
-            />
-            <ReferenceLine
-              y={1}
-              stroke="var(--text-muted)"
-              strokeDasharray="5 5"
-              label={{
-                value: "1g (rest)",
-                fill: "var(--text-muted)",
-                fontSize: 10,
-              }}
-            />
-            <Line
-              type="monotone"
-              dataKey="accel"
-              stroke="var(--accent-cyan)"
-              strokeWidth={2}
-              dot={false}
-              activeDot={{
-                r: 4,
-                fill: "var(--accent-cyan)",
-                stroke: "#fff",
-                strokeWidth: 1,
-              }}
-              isAnimationActive={false}
-            />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* ── Recent Jumps Log ── */}
-      {jumpHistory.length > 0 && (
-        <div className="glass-card" style={{ padding: "1.25rem" }}>
-          <h3
-            style={{
-              fontSize: "1rem",
-              fontWeight: 600,
-              color: "var(--text-primary)",
-              marginBottom: "0.75rem",
-            }}
-          >
-            🦘 Recent Jumps
-          </h3>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-            {jumpHistory.map((j, i) => (
-              <div
-                key={`${j.timestamp}-${i}`}
-                className="jump-alert animate-slide-in"
-                style={{ animationDelay: `${i * 0.05}s` }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                >
-                  <span style={{ fontWeight: 600, color: "var(--accent-emerald)" }}>
-                    {j.heightCm} cm
-                  </span>
-                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                    {new Date(j.timestamp).toLocaleTimeString()}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+            Reconnect Now
+          </button>
         </div>
       )}
+
+      {/* ── Removed Jump Splash Notification ── */}
+
+      {/* ── Main Arena Grid: 1 Col Mobile -> 12 Cols Laptop ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        {/* Max Jump Height — Hero Card (4 Cols) */}
+        <div className="lg:col-span-4 flex flex-col justify-center">
+          <HeroMetricCard liveJumpHeight={latestJump ? latestJump.heightCm : 0} />
+        </div>
+
+        {/* ── Live Acceleration Chart (8 Cols) ── */}
+        <div className="lg:col-span-8 flex flex-col h-[320px] sm:h-[380px]">
+          <LiveWaveform streamData={telemetryData} />
+        </div>
+      </div>
+
+      {/* ── Metrics Grid: 2-Cols Mobile, 3-Cols Laptop ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Live Accel G-Force */}
+        <div className="bg-card border border-border shadow-md rounded-xl p-5 flex flex-col justify-center">
+          <div className="text-xs font-bold uppercase tracking-widest text-primary mb-2">
+            📊 Proc. Accel (g)
+          </div>
+          <div className="text-3xl font-black text-foreground leading-none font-mono tracking-tighter">
+            {latestAccel !== null ? <AnimatedNumber value={latestAccel} isFloat={true} /> : "1.000"}
+          </div>
+          <div className="text-[10px] text-gray-500 mt-2 uppercase tracking-wide">
+            Moving Avg Filter
+          </div>
+        </div>
+
+        {/* Total Jumps Counter */}
+        <div className="bg-card border border-border shadow-md rounded-xl p-5 flex flex-col justify-center">
+          <div className="text-xs font-bold uppercase tracking-widest text-purple-400 mb-2">
+            🦘 Total Jumps
+          </div>
+          <div className="text-3xl font-black text-foreground leading-none font-mono tracking-tighter">
+            <AnimatedNumber value={totalJumpsCount} />
+          </div>
+          <div className="text-[10px] text-gray-500 mt-2 uppercase tracking-wide">
+            Current Session
+          </div>
+        </div>
+
+        {/* Telemetry Packets & Battery */}
+        <div className="bg-card border border-border shadow-md rounded-xl p-5 col-span-2 lg:col-span-1 flex flex-col justify-center">
+          <div className="text-xs font-bold uppercase tracking-widest text-amber-400 mb-2">
+            🔋 Hardware Stream
+          </div>
+          <div className="flex justify-between items-baseline">
+            <div>
+              <span className="text-2xl font-black text-foreground font-mono tracking-tighter">
+                <AnimatedNumber value={packetCount} />
+              </span>
+              <span className="text-[10px] text-gray-500 ml-1 uppercase">pkts</span>
+            </div>
+            <div className="text-right">
+              <span className={`text-lg font-bold ${latestBattery !== null && latestBattery < 20 ? "text-destructive" : "text-emerald-400"}`}>
+                {latestBattery !== null ? `${latestBattery}%` : "100%"}
+              </span>
+            </div>
+          </div>
+          <div className="text-[10px] text-gray-500 mt-2 flex items-center gap-2 uppercase tracking-wide">
+            <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-primary animate-pulse" : "bg-gray-600"}`} />
+            {isConnected ? "10Hz Active" : "Paused"}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Real-Time Sensor Raw Vector Accordion ── */}
+      <details className="bg-card border border-border shadow-md rounded-xl group">
+        <summary className="p-4 font-bold text-foreground cursor-pointer outline-none marker:text-primary select-none">
+          📐 Raw MPU-6050 Vectors (Expand for Debug)
+        </summary>
+        <div className="p-4 border-t border-border">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Accelerometer Axes */}
+          <div>
+            <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--neon-cyan)", marginBottom: "0.75rem" }}>
+              ACCELEROMETER (g)
+            </div>
+            {["x", "y", "z"].map((axis) => {
+              const val = latestRawAxes.accel[axis] || 0;
+              const percent = Math.min(100, Math.max(0, ((val + 3) / 6) * 100)); // Map -3g to +3g
+              return (
+                <div key={axis} style={{ marginBottom: "0.75rem" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--text-secondary)", marginBottom: "0.25rem" }}>
+                    <span style={{ textTransform: "uppercase", fontWeight: 700 }}>Axis {axis}</span>
+                    <span style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>{val.toFixed(3)}g</span>
+                  </div>
+                  <div className="gauge-bar-track">
+                    <div
+                      className="gauge-bar-fill"
+                      style={{
+                        width: `${percent}%`,
+                        background: axis === "z" ? "var(--neon-cyan)" : axis === "x" ? "var(--neon-purple)" : "var(--neon-emerald)",
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Gyroscope Axes */}
+          <div>
+            <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--neon-purple)", marginBottom: "0.75rem" }}>
+              GYROSCOPE (deg/sec)
+            </div>
+            {["x", "y", "z"].map((axis) => {
+              const val = latestRawAxes.gyro[axis] || 0;
+              const percent = Math.min(100, Math.max(0, ((val + 50) / 100) * 100));
+              return (
+                <div key={axis} style={{ marginBottom: "0.75rem" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--text-secondary)", marginBottom: "0.25rem" }}>
+                    <span style={{ textTransform: "uppercase", fontWeight: 700 }}>Gyro {axis}</span>
+                    <span style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>{val.toFixed(2)}°/s</span>
+                  </div>
+                  <div className="gauge-bar-track">
+                    <div
+                      className="gauge-bar-fill"
+                      style={{
+                        width: `${percent}%`,
+                        background: "var(--neon-purple)",
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          </div>
+        </div>
+      </details>
+
+      {/* ── Recent Jump Logs ── */}
+      <div className="bg-card border border-border shadow-md rounded-xl p-6">
+        <h3 className="text-base font-bold text-foreground mb-4">
+          📜 Jump Performance Audit Log ({jumpHistory.length})
+        </h3>
+
+        {jumpHistory.length === 0 ? (
+          <div className="text-center text-gray-500 py-8">
+            No jumps detected yet in this live session. Trigger simulation or perform jump movements!
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <AnimatePresence>
+              {jumpHistory.map((j, i) => {
+                const rank = getJumpRank(j.heightCm);
+                return (
+                  <motion.div
+                    layout
+                    initial={{ opacity: 0, x: -50 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 50 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                    key={`${j.timestamp}-${j.heightCm}`}
+                    className="flex justify-between items-center bg-background/30 p-4 rounded-lg border border-border"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-xl">{rank.icon}</span>
+                      <div>
+                        <div className={`font-black text-[1rem] ${rank.color}`}>
+                          {j.heightCm} cm
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Recorded @ {new Date(j.timestamp).toLocaleTimeString()}
+                        </div>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`px-3 py-1 bg-background/50 rounded-md text-xs font-bold border border-border ${rank.color}`}
+                    >
+                      {rank.label}
+                    </span>
+                  </motion.div>
+                );
+              })}
+            </AnimatePresence>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

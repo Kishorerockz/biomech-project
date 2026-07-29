@@ -1,9 +1,14 @@
 const express = require("express");
 const { v4: uuidv4 } = require("uuid");
+const mongoose = require("mongoose");
 const Session = require("../models/Session");
 const Telemetry = require("../models/Telemetry");
 
 const router = express.Router();
+
+// In-memory fallback storage when MongoDB is not connected
+const inMemorySessions = new Map();
+const inMemoryTelemetry = new Map();
 
 /* ─────────────────────────────────────────────
    1. POST /api/sessions/start
@@ -19,13 +24,23 @@ router.post("/start", async (req, res) => {
         .json({ error: "athleteId and sessionType are required" });
     }
 
-    const session = await Session.create({
-      sessionId: uuidv4(),
+    const sessionId = uuidv4();
+    const sessionData = {
+      sessionId,
       athleteId,
       sessionType,
-    });
+      status: "active",
+      startTime: new Date(),
+      createdAt: new Date(),
+    };
 
-    res.status(201).json(session);
+    if (mongoose.connection.readyState === 1) {
+      const session = await Session.create(sessionData);
+      return res.status(201).json(session);
+    } else {
+      inMemorySessions.set(sessionId, sessionData);
+      return res.status(201).json(sessionData);
+    }
   } catch (err) {
     console.error("POST /start error:", err);
     res.status(500).json({ error: err.message });
@@ -40,14 +55,25 @@ router.post("/:sessionId/end", async (req, res) => {
   try {
     const { sessionId } = req.params;
 
-    const session = await Session.findOne({ sessionId });
-    if (!session) return res.status(404).json({ error: "Session not found" });
-    if (session.status === "completed") {
-      return res.status(400).json({ error: "Session already ended" });
+    let session;
+    let telemetryDocs = [];
+
+    if (mongoose.connection.readyState === 1) {
+      session = await Session.findOne({ sessionId });
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      if (session.status === "completed") {
+        return res.status(400).json({ error: "Session already ended" });
+      }
+      telemetryDocs = await Telemetry.find({ sessionId }).lean();
+    } else {
+      session = inMemorySessions.get(sessionId);
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      if (session.status === "completed") {
+        return res.status(400).json({ error: "Session already ended" });
+      }
+      telemetryDocs = inMemoryTelemetry.get(sessionId) || [];
     }
 
-    // Compute summary statistics from telemetry
-    const telemetryDocs = await Telemetry.find({ sessionId }).lean();
     let peakAccelerationG = 0;
     let totalAccel = 0;
 
@@ -67,7 +93,12 @@ router.post("/:sessionId/end", async (req, res) => {
     session.peakAccelerationG = peakAccelerationG;
     session.avgAccelerationG = avgAccelerationG;
     session.totalSamples = telemetryDocs.length;
-    await session.save();
+
+    if (mongoose.connection.readyState === 1) {
+      await session.save();
+    } else {
+      inMemorySessions.set(sessionId, session);
+    }
 
     res.json(session);
   } catch (err) {
@@ -92,10 +123,15 @@ router.post("/:sessionId/calibrate", async (req, res) => {
         .json({ error: "samples array is required and must be non-empty" });
     }
 
-    const session = await Session.findOne({ sessionId });
+    let session;
+    if (mongoose.connection.readyState === 1) {
+      session = await Session.findOne({ sessionId });
+    } else {
+      session = inMemorySessions.get(sessionId);
+    }
+
     if (!session) return res.status(404).json({ error: "Session not found" });
 
-    // Compute mean offset per axis
     const sum = {
       accel: { x: 0, y: 0, z: 0 },
       gyro: { x: 0, y: 0, z: 0 },
@@ -125,7 +161,12 @@ router.post("/:sessionId/calibrate", async (req, res) => {
     };
 
     session.calibrationOffset = calibrationOffset;
-    await session.save();
+
+    if (mongoose.connection.readyState === 1) {
+      await session.save();
+    } else {
+      inMemorySessions.set(sessionId, session);
+    }
 
     console.log(
       `🎯  Calibration set for session ${sessionId.slice(0, 8)}…:`,
@@ -147,8 +188,13 @@ router.post("/:sessionId/telemetry", async (req, res) => {
   try {
     const { sessionId } = req.params;
 
-    // Verify session exists and is active
-    const session = await Session.findOne({ sessionId });
+    let session;
+    if (mongoose.connection.readyState === 1) {
+      session = await Session.findOne({ sessionId });
+    } else {
+      session = inMemorySessions.get(sessionId);
+    }
+
     if (!session) return res.status(404).json({ error: "Session not found" });
     if (session.status === "completed") {
       return res.status(400).json({ error: "Session already ended" });
@@ -162,15 +208,24 @@ router.post("/:sessionId/telemetry", async (req, res) => {
         .json({ error: "timestamp, accel, and gyro are required" });
     }
 
-    const doc = await Telemetry.create({
+    const doc = {
       sessionId,
       timestamp,
       accel,
       gyro,
       battery: battery ?? null,
-    });
+    };
 
-    res.status(201).json(doc);
+    if (mongoose.connection.readyState === 1) {
+      const dbDoc = await Telemetry.create(doc);
+      return res.status(201).json(dbDoc);
+    } else {
+      if (!inMemoryTelemetry.has(sessionId)) {
+        inMemoryTelemetry.set(sessionId, []);
+      }
+      inMemoryTelemetry.get(sessionId).push(doc);
+      return res.status(201).json(doc);
+    }
   } catch (err) {
     console.error("POST /:sessionId/telemetry error:", err);
     res.status(500).json({ error: err.message });
@@ -184,10 +239,15 @@ router.post("/:sessionId/telemetry", async (req, res) => {
 router.get("/:sessionId/telemetry", async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const docs = await Telemetry.find({ sessionId })
-      .sort({ timestamp: 1 })
-      .lean();
-    res.json(docs);
+    if (mongoose.connection.readyState === 1) {
+      const docs = await Telemetry.find({ sessionId })
+        .sort({ timestamp: 1 })
+        .lean();
+      return res.json(docs);
+    } else {
+      const docs = inMemoryTelemetry.get(sessionId) || [];
+      return res.json(docs);
+    }
   } catch (err) {
     console.error("GET /:sessionId/telemetry error:", err);
     res.status(500).json({ error: err.message });
@@ -201,10 +261,17 @@ router.get("/:sessionId/telemetry", async (req, res) => {
 router.get("/history/:athleteId", async (req, res) => {
   try {
     const { athleteId } = req.params;
-    const sessions = await Session.find({ athleteId })
-      .sort({ createdAt: -1 })
-      .lean();
-    res.json(sessions);
+    if (mongoose.connection.readyState === 1) {
+      const sessions = await Session.find({ athleteId })
+        .sort({ createdAt: -1 })
+        .lean();
+      return res.json(sessions);
+    } else {
+      const sessions = Array.from(inMemorySessions.values()).filter(
+        (s) => s.athleteId === athleteId
+      );
+      return res.json(sessions);
+    }
   } catch (err) {
     console.error("GET /history/:athleteId error:", err);
     res.status(500).json({ error: err.message });

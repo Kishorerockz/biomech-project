@@ -1,84 +1,120 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import LiveSession from "./components/LiveSession";
 import SessionHistory from "./components/SessionHistory";
 import config from "./lib/config";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("live");
+  const [simRunning, setSimRunning] = useState(false);
+
+  // Quick action to trigger simulation API if requested directly from UI
+  const triggerJumpSimulation = async () => {
+    try {
+      setSimRunning(true);
+      const res = await fetch("http://localhost:5000/api/sessions/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ athleteId: "sim_athlete", sessionType: "volleyball" }),
+      });
+      const data = await res.json();
+      if (data.sessionId) {
+        // Send a simulated jump packet directly via REST / WS test
+        console.log("Session initiated from UI:", data.sessionId);
+      }
+    } catch (err) {
+      console.error("Simulation error:", err);
+    } finally {
+      setTimeout(() => setSimRunning(false), 2000);
+    }
+  };
+
+  useEffect(() => {
+    if ('wakeLock' in navigator) {
+      navigator.wakeLock.request('screen').catch(err => console.log('Wake Lock Error:', err));
+    }
+  }, []);
 
   return (
-    <div style={{ padding: "0 1rem", maxWidth: "1280px", margin: "0 auto", width: "100%" }}>
-      {/* ── Header ── */}
-      <header
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "2rem 0 1.5rem",
-          borderBottom: "1px solid var(--border-subtle)",
-          marginBottom: "2rem",
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              fontSize: "1.5rem",
-              fontWeight: 800,
-              letterSpacing: "-0.02em",
-              color: "var(--text-primary)",
-              marginBottom: "0.25rem",
-            }}
-          >
-            {config.projectTitle}
-          </h1>
-          <p style={{ color: "var(--accent-cyan)", fontSize: "0.875rem", fontWeight: 500 }}>
-            {config.subtitle}
-          </p>
+    <div className="bg-surface text-on-surface font-body-sm min-h-screen pb-48">
+      {/* ── Sticky Header ── */}
+      <header className="fixed top-0 w-full z-50 bg-surface border-b border-outline-variant flex justify-between items-center px-margin-mobile md:px-margin-desktop h-16">
+        <div className="flex items-center gap-xs">
+          <span className="material-symbols-outlined text-primary-fixed-dim" style={{fontVariationSettings: "'FILL' 1"}}>sensors</span>
+          <div className="flex items-center gap-2">
+            <span className="font-data-label text-[14px] text-on-surface uppercase">{config.defaultAthleteId || "sim_athlete"}: CONNECTED</span>
+            <div className="w-2 h-2 rounded-full bg-[#00ff7f] pulse-dot-green"></div>
+          </div>
         </div>
-
-        {/* Team Members */}
-        <div style={{ display: "flex", gap: "1rem", textAlign: "right" }}>
-          {config.teamMembers.map((member, idx) => (
-            <div key={idx} style={{ fontSize: "0.75rem" }}>
-              <div style={{ color: "var(--text-primary)", fontWeight: 500 }}>
-                {member.name}
-              </div>
-              <div style={{ color: "var(--text-muted)" }}>{member.rollNo}</div>
-            </div>
-          ))}
-        </div>
+        <button className="w-10 h-10 rounded-full flex items-center justify-center hover:bg-surface-container-high transition-colors text-on-surface-variant">
+          <span className="material-symbols-outlined text-primary-fixed-dim" style={{fontVariationSettings: "'FILL' 1"}}>account_circle</span>
+        </button>
       </header>
 
-      {/* ── Main Navigation ── */}
-      <nav
-        style={{
-          display: "flex",
-          gap: "0.5rem",
-          marginBottom: "2rem",
-          background: "var(--bg-card)",
-          padding: "0.5rem",
-          borderRadius: "var(--radius-md)",
-          width: "fit-content",
-        }}
-      >
+      {/* ── Main Content Canvas ── */}
+      <main className="pt-24 px-margin-mobile md:px-margin-desktop max-w-7xl mx-auto space-y-lg flex flex-col items-center">
+        {activeTab === "live" && <LiveSession />}
+        {activeTab === "history" && <SessionHistory />}
+        {activeTab === "analysis" && (
+          <div className="text-on-surface-variant font-body-lg text-center mt-20 p-8 card-base w-full max-w-md">
+            <span className="material-symbols-outlined text-4xl mb-4 text-outline">construction</span>
+            <p>Analysis Module Under Construction</p>
+          </div>
+        )}
+        {activeTab === "calibration" && (
+          <div className="text-on-surface-variant font-body-lg text-center mt-20 p-8 card-base w-full max-w-md">
+            <span className="material-symbols-outlined text-4xl mb-4 text-outline">tune</span>
+            <p>Hardware Calibration Under Construction</p>
+          </div>
+        )}
+      </main>
+
+      {/* ── Sticky Bottom Action Dock (Only on Live tab for now) ── */}
+      {activeTab === "live" && (
+        <div className="fixed w-full z-40 bg-surface/80 backdrop-blur-md border-t border-outline-variant p-4 pb-6 md:pb-8 flex justify-center items-center shadow-[0_-10px_40px_rgba(0,0,0,0.5)] bottom-[64px]">
+          <button
+            className="w-full max-w-md bg-primary-fixed hover:bg-surface-tint text-[#000000] font-data-value text-[18px] py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 disabled:opacity-50"
+            onClick={triggerJumpSimulation}
+            disabled={simRunning}
+          >
+            <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>
+              {simRunning ? "hourglass_top" : "play_circle"}
+            </span>
+            {simRunning ? "Initializing Session..." : "Trigger Session Start"}
+          </button>
+        </div>
+      )}
+
+      {/* ── Fixed Bottom Navigation Bar ── */}
+      <nav className="fixed bottom-0 left-0 w-full bg-surface-container-low border-t border-outline-variant px-margin-mobile md:px-margin-desktop py-2 z-50 flex justify-around items-center">
         <button
-          className={`nav-tab ${activeTab === "live" ? "active" : ""}`}
-          onClick={() => setActiveTab("live")}
+          onClick={() => setActiveTab('live')}
+          className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'live' ? 'text-primary-fixed' : 'text-on-surface-variant hover:text-on-surface'}`}
         >
-          Live Telemetry
+          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>sensors</span>
+          <span className="text-[10px] font-data-label uppercase tracking-wider">Live</span>
         </button>
         <button
-          className={`nav-tab ${activeTab === "history" ? "active" : ""}`}
-          onClick={() => setActiveTab("history")}
+          onClick={() => setActiveTab('analysis')}
+          className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'analysis' ? 'text-primary-fixed' : 'text-on-surface-variant hover:text-on-surface'}`}
         >
-          Session History
+          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>analytics</span>
+          <span className="text-[10px] font-data-label uppercase tracking-wider">Analysis</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'history' ? 'text-primary-fixed' : 'text-on-surface-variant hover:text-on-surface'}`}
+        >
+          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>history</span>
+          <span className="text-[10px] font-data-label uppercase tracking-wider">History</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('calibration')}
+          className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'calibration' ? 'text-primary-fixed' : 'text-on-surface-variant hover:text-on-surface'}`}
+        >
+          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>tune</span>
+          <span className="text-[10px] font-data-label uppercase tracking-wider">Calibration</span>
         </button>
       </nav>
-
-      {/* ── Content Area ── */}
-      <main style={{ paddingBottom: "4rem" }}>
-        {activeTab === "live" ? <LiveSession /> : <SessionHistory />}
-      </main>
     </div>
   );
 }
