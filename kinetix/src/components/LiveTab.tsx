@@ -22,6 +22,12 @@ export const LiveTab: React.FC<LiveTabProps> = ({
   const [jumpAnimation, setJumpAnimation] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dataPointsRef = useRef<number[]>([]);
+  const latestAccelRef = useRef<number>(sensorState.procAccelG || 1.0);
+
+  // Keep ref in sync with latest sensor state for the animation loop
+  useEffect(() => {
+    latestAccelRef.current = sensorState.procAccelG;
+  }, [sensorState.procAccelG]);
 
   // Initialize buffer for accelerometer graph
   useEffect(() => {
@@ -50,12 +56,11 @@ export const LiveTab: React.FC<LiveTabProps> = ({
           const points = dataPointsRef.current;
           points.shift();
 
-          // Generate next accelerometer Z value with baseline noise + occasional spike
-          let noise = (Math.random() - 0.5) * 6;
-          if (step % 40 === 0) {
-            noise = (Math.random() > 0.5 ? 1 : -1) * (25 + Math.random() * 20);
-          }
-          const nextVal = Math.max(10, Math.min(90, 50 + noise));
+          // Generate next accelerometer Z value from real telemetry
+          // Baseline is 1.0g. Map to canvas Y (center is ~50).
+          const currentG = latestAccelRef.current || 1.0;
+          const mappedY = 50 - (currentG - 1.0) * 25; 
+          const nextVal = Math.max(5, Math.min(95, mappedY));
           points.push(nextVal);
 
           // Draw Canvas background & grid
@@ -117,37 +122,6 @@ export const LiveTab: React.FC<LiveTabProps> = ({
     setAudioEnabled(!audioEnabled);
   };
 
-  // Trigger manual simulated jump
-  const handleSimulateJump = () => {
-    setJumpAnimation(true);
-    const newJump = parseFloat((42 + Math.random() * 7).toFixed(1)); // 42.0 to 49.0 cm
-    
-    // Inject a massive waveform spike
-    const points = dataPointsRef.current;
-    if (points.length > 10) {
-      points[points.length - 8] = 95;
-      points[points.length - 6] = 10;
-      points[points.length - 4] = 85;
-      points[points.length - 2] = 30;
-    }
-
-    setTimeout(() => {
-      setJumpAnimation(false);
-      const isPeak = newJump > sensorState.maxJumpCm;
-      
-      // Play synthesis audio feedback chime
-      audioEngine.playJumpChime(isPeak);
-
-      setSensorState((prev) => ({
-        ...prev,
-        lastJumpCm: newJump,
-        maxJumpCm: Math.max(prev.maxJumpCm, newJump),
-        totalJumps: prev.totalJumps + 1,
-        isNewPeak: isPeak,
-      }));
-      onRecordJump(newJump);
-    }, 400);
-  };
 
   return (
     <div className="pt-20 md:pt-24 px-5 md:px-10 max-w-4xl mx-auto space-y-6 pb-48 flex flex-col items-center">
@@ -155,8 +129,16 @@ export const LiveTab: React.FC<LiveTabProps> = ({
       <div className="w-full flex justify-between items-center bg-white/5 border border-white/10 px-5 py-3 rounded-2xl backdrop-blur-md gap-3">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-[#c9a050] filled">sensors</span>
-          <span className="font-data-label text-xs sm:text-sm text-white/80">ESP32: CONNECTED</span>
-          <div className="w-2.5 h-2.5 rounded-full bg-[#00ff7f] pulse-dot-green ml-1" />
+          <span className="font-data-label text-xs sm:text-sm text-white/80">
+            {sensorState.connected ? 'ESP32: CONNECTED' : sensorState.reconnecting ? 'RECONNECTING...' : 'ESP32: OFFLINE'}
+          </span>
+          <div className={`w-2.5 h-2.5 rounded-full ml-1 ${
+            sensorState.connected
+              ? 'bg-[#00ff7f] pulse-dot-green'
+              : sensorState.reconnecting
+              ? 'bg-amber-400 animate-pulse'
+              : 'bg-red-500'
+          }`} />
         </div>
 
         <div className="flex items-center gap-4">
@@ -224,15 +206,6 @@ export const LiveTab: React.FC<LiveTabProps> = ({
             </div>
           </div>
 
-          <div className="flex gap-2 mt-2">
-            <button
-              onClick={handleSimulateJump}
-              className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-[#c9a050] rounded-full font-data-label text-xs flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer font-bold uppercase tracking-wider"
-            >
-              <span className="material-symbols-outlined text-sm">flight_takeoff</span>
-              Simulate Spike Jump
-            </button>
-          </div>
         </div>
       </section>
 
@@ -331,13 +304,20 @@ export const LiveTab: React.FC<LiveTabProps> = ({
       </section>
 
       {/* Fixed Bottom Action Dock */}
-      <div className="fixed w-full z-40 bg-[#0a0a0a]/90 backdrop-blur-md border-t border-white/10 p-4 pb-6 md:pb-6 flex justify-center items-center shadow-[0_-10px_40px_rgba(0,0,0,0.8)] bottom-20 md:bottom-0">
+      <div className="fixed w-full z-40 bg-[#0a0a0a]/90 backdrop-blur-md border-t border-white/10 p-4 pb-6 md:pb-6 flex justify-center items-center shadow-[0_-10px_40px_rgba(0,0,0,0.8)] bottom-20 md:bottom-0 gap-3">
         <button
           onClick={onTriggerSessionStart}
-          className="w-full max-w-md bg-[#c9a050] hover:bg-[#d9b060] text-black font-data-value text-sm py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 shadow-lg cursor-pointer uppercase tracking-[0.2em] font-bold"
+          className="flex-1 max-w-xs bg-[#c9a050] hover:bg-[#d9b060] text-black font-data-value text-sm py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 shadow-lg cursor-pointer uppercase tracking-[0.2em] font-bold"
         >
           <span className="material-symbols-outlined filled">play_circle</span>
-          Trigger Session Start
+          Start Session
+        </button>
+        <button
+          onClick={() => onRecordJump(Math.floor(Math.random() * 20) + 35)}
+          className="flex-1 max-w-xs bg-emerald-500 hover:bg-emerald-400 text-black font-data-value text-sm py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 shadow-lg cursor-pointer uppercase tracking-[0.2em] font-bold"
+        >
+          <span className="material-symbols-outlined filled">bolt</span>
+          Simulate Jump
         </button>
       </div>
     </div>

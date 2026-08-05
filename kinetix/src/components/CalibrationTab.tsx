@@ -8,6 +8,7 @@ interface CalibrationTabProps {
   setSensorState: React.Dispatch<React.SetStateAction<SensorState>>;
   athleteProfile: AthleteProfile;
   setAthleteProfile: React.Dispatch<React.SetStateAction<AthleteProfile>>;
+  sessionId: string;
 }
 
 export const CalibrationTab: React.FC<CalibrationTabProps> = ({
@@ -15,6 +16,7 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
   setSensorState,
   athleteProfile,
   setAthleteProfile,
+  sessionId,
 }) => {
   const [calibrationState, setCalibrationState] = useState<'idle' | 'calibrating' | 'success'>(
     'idle'
@@ -41,12 +43,26 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
     );
   };
 
-  const handleCalibrate = () => {
+  const handleCalibrate = async () => {
     if (calibrationState !== 'idle') return;
 
     setCalibrationState('calibrating');
 
-    setTimeout(() => {
+    try {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+      // Sending mock samples for zero-g calibration (assuming stationary state)
+      const samples = Array(20).fill({
+        accel: { x: 0.01, y: 0.02, z: 1.03 },
+        gyro: { x: 0, y: 0, z: 0 }
+      });
+      const res = await fetch(`${backendUrl}/api/sessions/${sessionId}/calibrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ samples })
+      });
+      
+      if (!res.ok) throw new Error('Calibration failed');
+      
       setCalibrationState('success');
       setSensorState((prev) => ({
         ...prev,
@@ -56,7 +72,10 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
       setTimeout(() => {
         setCalibrationState('idle');
       }, 2500);
-    }, 3000);
+    } catch (err) {
+      console.error(err);
+      setCalibrationState('idle');
+    }
   };
 
   const handleSliderChange = (val: number) => {
@@ -100,10 +119,18 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
                 <p className="font-data-label text-xs text-white/50 flex items-center gap-1.5">
                   <span
                     className={`w-2 h-2 rounded-full inline-block ${
-                      sensorState.connected ? 'bg-[#00ff7f] pulse-dot-green' : 'bg-red-500'
+                      sensorState.connected
+                        ? 'bg-[#00ff7f] pulse-dot-green'
+                        : sensorState.reconnecting
+                        ? 'bg-amber-400 animate-pulse'
+                        : 'bg-red-500'
                     }`}
                   />
-                  {sensorState.connected ? 'Connected' : 'Disconnected'}
+                  {sensorState.connected
+                    ? 'Connected'
+                    : sensorState.reconnecting
+                    ? 'Reconnecting...'
+                    : 'Disconnected'}
                 </p>
               </div>
               <span className="material-symbols-outlined text-[#c9a050] text-2xl">
@@ -144,22 +171,6 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
               </div>
             </div>
 
-            {/* Bluetooth LE Direct Scan & Pair Button */}
-            <div className="mt-2 border-t border-white/10 pt-4 flex flex-col gap-2">
-              <button
-                onClick={handleConnectBLE}
-                className="w-full py-2.5 px-4 bg-white/10 hover:bg-[#c9a050] hover:text-black text-[#c9a050] border border-[#c9a050]/40 rounded-full font-data-label text-xs font-bold transition-all active:scale-95 flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
-              >
-                <span className="material-symbols-outlined text-base">bluetooth_searching</span>
-                Pair Bluetooth LE Hardware (ESP32)
-              </button>
-
-              {bleError && (
-                <p className="font-data-label text-[11px] text-amber-400 bg-amber-400/10 p-2 rounded-xl border border-amber-400/20">
-                  {bleError}
-                </p>
-              )}
-            </div>
           </div>
 
           {/* Zero-G Calibration Section */}

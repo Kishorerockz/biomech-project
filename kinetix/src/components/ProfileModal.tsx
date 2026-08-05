@@ -40,12 +40,13 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   };
 
   // Derive peak jump across sessions for calculations
-  const maxJumpCm = Math.max(...sessions.map((s) => s.peakJumpCm), 54.5);
+  const maxJumpCm = sessions.reduce((max, s) => Math.max(max, s.peakJumpCm || 0), 0);
 
   // Sayers Peak Power Formula: P(Watts) = 60.7 * JumpHeight(cm) + 45.3 * Mass(kg) - 2055
-  const estimatedPeakPowerW = Math.round(
-    60.7 * maxJumpCm + 45.3 * athleteProfile.weightKg - 2055
-  );
+  const estimatedPeakPowerW = maxJumpCm > 0 
+    ? Math.max(0, Math.round(60.7 * maxJumpCm + 45.3 * athleteProfile.weightKg - 2055))
+    : 0;
+    
   const powerToWeightRatio = (
     estimatedPeakPowerW / (athleteProfile.weightKg || 1)
   ).toFixed(1);
@@ -140,11 +141,14 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           <div className="text-center md:text-left flex-1 space-y-3">
             <div>
               <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
-                <h1 className="font-headline-lg-mobile md:font-headline-lg text-2xl md:text-3xl font-bold text-white tracking-wide">
-                  {athleteProfile.name}
-                </h1>
+                <input
+                  type="text"
+                  value={athleteProfile.name}
+                  onChange={(e) => setAthleteProfile(prev => ({ ...prev, name: e.target.value }))}
+                  className="font-headline-lg-mobile md:font-headline-lg text-2xl md:text-3xl font-bold text-white tracking-wide bg-transparent border-b border-transparent hover:border-white/20 focus:border-[#c9a050] focus:outline-none transition-colors w-full max-w-xs text-center md:text-left p-0"
+                />
                 <span className="font-data-label text-[10px] bg-[#c9a050]/20 text-[#c9a050] border border-[#c9a050]/40 px-2 py-0.5 rounded-full uppercase font-bold">
-                  VERIFIED HARDWARE NODE
+                  PRO ACCOUNT
                 </span>
               </div>
               <p className="font-body-lg text-base text-white/60 mt-0.5">{athleteProfile.role}</p>
@@ -192,18 +196,18 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3">
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap mb-1">
                 <span className="material-symbols-outlined text-[#c9a050] text-xl shrink-0">biometrics</span>
-                <h2 className="font-headline-md text-base sm:text-lg md:text-xl text-[#c9a050] font-bold uppercase tracking-wide leading-tight">
-                  BIOMECHANICAL INPUT ENGINE
+                <h2 className="font-headline-md text-base md:text-lg text-[#c9a050] font-bold uppercase tracking-wide">
+                  BIOMECHANICS
                 </h2>
               </div>
-              <p className="font-data-label text-xs text-white/60 mt-1">
-                Core physics baseline parameters required for Sayers impulse &amp; vertical reach calculations
+              <p className="font-data-label text-xs text-white/50 leading-relaxed">
+                Core baseline parameters required for impulse & vertical reach calculations.
               </p>
             </div>
             <span className="font-data-label text-[10px] bg-[#c9a050] text-black px-2.5 py-1 rounded-full font-bold uppercase tracking-widest self-start sm:self-center shrink-0">
-              Core Calibration Input
+              Calibration Data
             </span>
           </div>
 
@@ -302,7 +306,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
               <div className="font-display-metrics text-xl text-[#c9a050] mt-1 font-bold">
                 {estimatedMaxReachCm.toFixed(1)} cm
               </div>
-              <span className="font-data-label text-[9px] text-white/40 mt-0.5">Reach + Peak Jump ({maxJumpCm}cm)</span>
+              <span className="font-data-label text-[9px] text-white/40 mt-0.5">
+                {maxJumpCm > 0 ? `Reach + Peak Jump (${maxJumpCm}cm)` : 'Based on standing reach'}
+              </span>
             </div>
 
             <div className="bg-white/5 p-3 rounded-xl border border-white/10 flex flex-col justify-between">

@@ -87,12 +87,29 @@ router.post("/:sessionId/end", async (req, res) => {
 
     const avgAccelerationG =
       telemetryDocs.length > 0 ? totalAccel / telemetryDocs.length : 0;
+      
+    // Retrieve jumps from global state populated by server.js
+    const jumps = global.sessionJumps ? (global.sessionJumps[sessionId] || []) : [];
+    
+    let peakJumpCm = 0;
+    let totalJumpCm = 0;
+    
+    for (const j of jumps) {
+      if (j.heightCm > peakJumpCm) peakJumpCm = j.heightCm;
+      totalJumpCm += j.heightCm;
+    }
+    
+    const avgJumpCm = jumps.length > 0 ? totalJumpCm / jumps.length : 0;
 
     session.status = "completed";
     session.endTime = new Date();
     session.peakAccelerationG = peakAccelerationG;
     session.avgAccelerationG = avgAccelerationG;
     session.totalSamples = telemetryDocs.length;
+    session.peakJumpCm = peakJumpCm;
+    session.avgJumpCm = avgJumpCm;
+    session.totalReps = jumps.length;
+    session.attempts = jumps;
 
     if (mongoose.connection.readyState === 1) {
       await session.save();

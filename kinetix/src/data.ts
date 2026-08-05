@@ -15,6 +15,7 @@ export const INITIAL_ATHLETE_PROFILE: AthleteProfile = {
 
 export const INITIAL_SENSOR_STATE: SensorState = {
   connected: true,
+  reconnecting: false,
   deviceName: 'ESP32 Sensor Unit',
   batteryPercent: 88,
   signalDbm: -52,

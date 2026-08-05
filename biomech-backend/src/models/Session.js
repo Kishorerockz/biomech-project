@@ -43,6 +43,24 @@ const sessionSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    peakJumpCm: {
+      type: Number,
+      default: 0,
+    },
+    avgJumpCm: {
+      type: Number,
+      default: 0,
+    },
+    totalReps: {
+      type: Number,
+      default: 0,
+    },
+    attempts: [
+      {
+        heightCm: Number,
+        timestamp: Number,
+      }
+    ],
     /* ---- Calibration (populated in Phase 3) ---- */
     calibrationOffset: {
       accel: {
