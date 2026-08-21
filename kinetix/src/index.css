@@ -1,0 +1,449 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #121212;
+    color: #e5e2e1;
+    font-family: 'Inter', sans-serif;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+}
+
+/* Light Theme Global Overrides */
+html.light,
+html.light body,
+.light,
+.light body {
+  background-color: #f8fafc !important; /* Clean Slate-50 background */
+  color: #0f172a !important;            /* High contrast Slate-900 text */
+}
+
+/* Background Card & Container Overrides */
+html.light .card-base, 
+html.light .card-container,
+html.light .data-card,
+html.light .level-2,
+html.light .glass-card,
+html.light .bg-\[\#131313\],
+html.light .bg-\[\#121212\],
+html.light .bg-\[\#0e0e0e\],
+html.light .bg-\[\#0a0a0a\],
+html.light .bg-\[\#1c1b1b\],
+html.light .bg-\[\#1a1a1a\],
+html.light .bg-\[\#242424\],
+html.light .bg-surface-container-low,
+html.light .bg-surface-container-lowest,
+html.light .bg-surface-container-high,
+html.light .bg-black\/40,
+html.light .bg-black\/80,
+html.light .bg-black\/70,
+html.light .bg-black\/60,
+html.light .bg-black\/50,
+html.light .bg-black\/20 {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.06), 0 2px 6px -1px rgba(15, 23, 42, 0.04) !important;
+}
+
+/* Nested Cards & Subtle Boxes */
+html.light .bg-white\/5,
+html.light .bg-white\/10,
+html.light .bg-white\/15 {
+  background-color: #f1f5f9 !important; /* Soft Slate-100 */
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+/* Modal and Drawer Backdrop Overlays */
+html.light .fixed.inset-0.bg-black\/60,
+html.light .fixed.inset-0.bg-black\/80,
+html.light .fixed.inset-0.bg-black\/70 {
+  background-color: rgba(15, 23, 42, 0.55) !important;
+  backdrop-filter: blur(8px) !important;
+}
+
+/* Navigation, Header, & Footer Bars */
+html.light header,
+html.light nav,
+html.light footer {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.05) !important;
+}
+
+/* Header & Bottom Bar Active Tab Underline */
+html.light [layoutid="headerTabUnderline"],
+html.light [layoutid="activeTabUnderline"] {
+  background-color: #0284c7 !important;
+  box-shadow: 0 0 10px rgba(2, 132, 199, 0.4) !important;
+}
+
+/* Form Inputs, Selects, & Textareas */
+html.light input,
+html.light select,
+html.light textarea {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+html.light input::placeholder,
+html.light textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+html.light select option {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+/* Borders in Light Mode */
+html.light .border-white\/5,
+html.light .border-white\/10,
+html.light .border-white\/20,
+html.light .border-white\/30,
+html.light .border-\[\#3a4a49\],
+html.light .border-\[\#2a2a2a\],
+html.light .border-\[\#353534\],
+html.light .border-\[\#2A2A2A\],
+html.light .border-surface-container-high {
+  border-color: #cbd5e1 !important;
+}
+
+/* Typography Colors in Light Mode */
+html.light .text-white,
+html.light .text-\[\#e5e2e1\],
+html.light .text-primary,
+html.light .text-white\/90 {
+  color: #0f172a !important; /* Crisp Slate-900 */
+}
+
+html.light .text-white\/80,
+html.light .text-white\/70,
+html.light .text-\[\#b9cac9\],
+html.light .text-on-surface-variant {
+  color: #334155 !important; /* Clear Slate-700 */
+}
+
+html.light .text-white\/60,
+html.light .text-white\/50,
+html.light .text-white\/40,
+html.light .text-outline-variant\/50 {
+  color: #64748b !important; /* Readable Slate-500 */
+}
+
+/* Primary Cyan/Teal Brand Color Mapping */
+html.light .text-\[\#00dddd\],
+html.light .text-\[\#00fbfb\],
+html.light .text-surface-tint {
+  color: #0284c7 !important; /* Sky 600 - High legibility on light backgrounds */
+}
+
+/* Primary Action Buttons in Light Mode */
+html.light .bg-\[\#00dddd\],
+html.light .bg-\[\#00fbfb\],
+html.light .bg-surface-tint,
+html.light .btn-primary {
+  background-color: #0284c7 !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 14px rgba(2, 132, 199, 0.25) !important;
+}
+
+/* Force all text & icons inside Primary Buttons to stay White */
+html.light .bg-\[\#00dddd\] *,
+html.light .bg-\[\#00fbfb\] *,
+html.light .bg-surface-tint *,
+html.light .btn-primary * {
+  color: #ffffff !important;
+}
+
+/* Gold / Amber Brand Accent Mapping */
+html.light .text-\[\#c9a050\] {
+  color: #d97706 !important; /* Rich Amber-600 */
+}
+
+html.light .bg-\[\#c9a050\] {
+  background-color: #d97706 !important;
+  color: #ffffff !important;
+}
+
+html.light .bg-\[\#c9a050\] * {
+  color: #ffffff !important;
+}
+
+html.light .border-\[\#c9a050\],
+html.light .border-\[\#c9a050\]\/40,
+html.light .border-\[\#c9a050\]\/30,
+html.light .border-\[\#c9a050\]\/50 {
+  border-color: #d97706 !important;
+}
+
+html.light .border-\[\#00dddd\],
+html.light .border-\[\#00dddd\]\/40,
+html.light .border-\[\#00dddd\]\/50,
+html.light .border-surface-tint {
+  border-color: #0284c7 !important;
+}
+
+/* Status Green & Red Indicators */
+html.light .text-emerald-400,
+html.light .text-green-400,
+html.light .text-\[\#00ff7f\] {
+  color: #16a34a !important; /* Green-600 */
+}
+
+html.light .bg-emerald-500\/20,
+html.light .bg-emerald-500\/10 {
+  background-color: #dcfce7 !important;
+  border-color: #86efac !important;
+  color: #15803d !important;
+}
+
+html.light .text-red-400,
+html.light .text-red-500 {
+  color: #dc2626 !important; /* Red-600 */
+}
+
+html.light .bg-red-500\/20,
+html.light .bg-red-500\/10 {
+  background-color: #fee2e2 !important;
+  border-color: #fca5a5 !important;
+  color: #b91c1c !important;
+}
+
+/* SVG Elements & Chart Paths in Light Mode */
+html.light svg text {
+  fill: #334155 !important;
+}
+
+html.light .stroke-white\/10,
+html.light .text-white\/10 {
+  stroke: #cbd5e1 !important;
+  color: #cbd5e1 !important;
+}
+
+html.light .stroke-\[\#2a2a2a\],
+html.light .stroke-\[\#3a4a49\],
+html.light .stroke-\[\#353534\] {
+  stroke: #e2e8f0 !important;
+}
+
+html.light .stroke-\[\#00dddd\],
+html.light .stroke-\[\#00fbfb\] {
+  stroke: #0284c7 !important;
+}
+
+html.light .stroke-\[\#c9a050\] {
+  stroke: #d97706 !important;
+}
+
+/* Sliders and Range Input Tracks */
+html.light .slider-track,
+html.light input[type=range]::-webkit-slider-runnable-track {
+  background-color: #e2e8f0 !important;
+}
+
+html.light input[type=range]::-webkit-slider-thumb {
+  background: #0284c7 !important;
+  box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.2) !important;
+}
+
+/* Tooltips, Tags, & Node Popups in Light Mode */
+html.light .group\/node .hidden {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Chart Line Flags & Tags */
+html.light .bg-\[\#0a0a0a\],
+html.light .bg-\[\#131313\] {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Tables in Light Mode */
+html.light table th {
+  background-color: #f1f5f9 !important;
+  color: #475569 !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light table td {
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+html.light table tr:hover {
+  background-color: #f8fafc !important;
+}
+
+/* Glow effects in Light Mode */
+html.light .glow-cyan {
+  text-shadow: 0 0 8px rgba(2, 132, 199, 0.3) !important;
+}
+
+/* Custom Typography Utility Classes */
+.font-display-metrics {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.font-data-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+
+.font-data-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 500;
+}
+
+/* Material Symbols fill modifier */
+.material-symbols-outlined.filled {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Custom Card & Tech Containers */
+.card-base, .card-container {
+  background-color: #1A1A1A;
+  border: 1px solid #2A2A2A;
+  border-radius: 24px;
+}
+
+.level-2 {
+  background-color: #242424;
+  border: 1px solid #2A2A2A;
+}
+
+.tech-border {
+  border: 1px solid #2a2a2a;
+}
+
+/* Data Inputs */
+.data-input {
+  background-color: #1A1A1A;
+  border: 1px solid #2A2A2A;
+  border-radius: 9999px;
+  color: #ffffff;
+  transition: all 0.2s ease-in-out;
+}
+
+.data-input:focus {
+  border-color: #00fbfb;
+  box-shadow: 0 0 0 4px rgba(0, 251, 251, 0.1);
+  outline: none;
+}
+
+/* Buttons */
+.btn-primary {
+  background-color: #00fbfb;
+  color: #000000;
+  border-radius: 9999px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+  background-color: #00dddd;
+}
+
+.btn-warning {
+  background-color: #f59e0b;
+  color: #000000;
+  border-radius: 9999px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+}
+
+.btn-success {
+  background-color: #10b981;
+  color: #000000;
+  border-radius: 9999px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+}
+
+/* Pulse animations */
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(197, 2, 11, 0.7); }
+  70% { box-shadow: 0 0 0 6px rgba(197, 2, 11, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(197, 2, 11, 0); }
+}
+
+.pulse-dot-red {
+  animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-green {
+  0% { box-shadow: 0 0 0 0 rgba(0, 255, 127, 0.7); }
+  70% { box-shadow: 0 0 0 6px rgba(0, 255, 127, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 255, 127, 0); }
+}
+
+.pulse-dot-green {
+  animation: pulse-green 2s infinite;
+}
+
+@keyframes pulse-cyan {
+  0% { box-shadow: 0 0 0 0 rgba(0, 251, 251, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(0, 251, 251, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 251, 251, 0); }
+}
+
+.pulse-dot-cyan {
+  animation: pulse-cyan 1.8s infinite;
+}
+
+.glow-cyan {
+  text-shadow: 0 0 10px rgba(0, 251, 251, 0.5);
+}
+
+/* Waveform path drawing */
+@keyframes drawLine {
+  to { stroke-dashoffset: 0; }
+}
+
+.waveform-path {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: drawLine 2s linear forwards;
+}
+
+/* Hide scrollbar */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom Range Slider */
+input[type=range]::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #00fbfb;
+  cursor: pointer;
+  box-shadow: 0 0 0 4px rgba(0, 251, 251, 0.2);
+}
+
+.slider-track {
+  height: 2px;
+  background: #2A2A2A;
+  border-radius: 2px;
+}
+
+.progress-ring__circle {
+  transition: stroke-dashoffset 0.5s ease-in-out;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}

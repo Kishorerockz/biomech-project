@@ -1,0 +1,6 @@
+{
+  "name": "Kinetix",
+  "description": "High-precision sports biomechanics and motion analytics platform with live jump sensor streaming, zero-G accelerometer calibration, session debriefs, and performance analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

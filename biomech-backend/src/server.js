@@ -44,6 +44,10 @@ async function flushBuffer(sessionId) {
   if (!buf || buf.length === 0) return;
 
   const toInsert = buf.splice(0); // drain the buffer
+  if (require("mongoose").connection.readyState !== 1) {
+    // MongoDB offline - silently keep in memory buffer cleared
+    return;
+  }
   try {
     await Telemetry.insertMany(toInsert);
     console.log(
@@ -51,10 +55,6 @@ async function flushBuffer(sessionId) {
     );
   } catch (err) {
     console.error("❌  insertMany failed:", err.message);
-    // Push them back so they aren't lost
-    telemetryBuffer[sessionId] = toInsert.concat(
-      telemetryBuffer[sessionId] || []
-    );
   }
 }
 
@@ -72,10 +72,12 @@ const calibrationCache = {}; // sessionId → { accel:{x,y,z}, gyro:{x,y,z} }
 
 async function getCalibration(sessionId) {
   if (calibrationCache[sessionId]) return calibrationCache[sessionId];
-  const session = await Session.findOne({ sessionId }).lean();
-  if (session && session.calibrationOffset) {
-    calibrationCache[sessionId] = session.calibrationOffset;
-    return session.calibrationOffset;
+  if (require("mongoose").connection.readyState === 1) {
+    const session = await Session.findOne({ sessionId }).lean();
+    if (session && session.calibrationOffset) {
+      calibrationCache[sessionId] = session.calibrationOffset;
+      return session.calibrationOffset;
+    }
   }
   return null;
 }

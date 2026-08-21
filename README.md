@@ -7,7 +7,7 @@ Monitors athlete acceleration, gyroscope data, and detects jumps (height/flight 
 
 The project consists of three main parts:
 1. **`biomech-backend/`**: Node.js + Express + Socket.io + MongoDB API that provides REST routes, a batched database write buffer, signal processing (moving averages), and a state-machine based jump detection algorithm.
-2. **`biomech-dashboard/`**: React + Vite frontend using Tailwind CSS and Recharts for live WebSocket telemetry streams and historical session analytics.
+2. **`kinetix/`**: Modern React + Vite frontend (formerly biomech-dashboard) using Tailwind CSS and Canvas rendering for live WebSocket telemetry streams and historical jump analytics.
 3. **`simulator/`**: Python hardware mocker that generates synthetic 10Hz MPU-6050 (accel/gyro) physics payloads over Socket.io to test the backend logic.
 
 ## Environment Variables
@@ -19,7 +19,7 @@ PORT=5000
 MONGODB_URI=mongodb+srv://<user>:<password>@<cluster_url>/biomech
 ```
 
-**`biomech-dashboard/.env`**
+**`kinetix/.env.local`**
 ```
 VITE_BACKEND_URL=http://localhost:5000
 ```
@@ -34,13 +34,13 @@ npm run dev
 ```
 *(Runs on port 5000)*
 
-### 2. Start the Frontend Dashboard
+### 2. Start the Frontend Dashboard (Kinetix)
 ```bash
-cd biomech-dashboard
+cd kinetix
 npm install
 npm run dev
 ```
-*(Runs on port 5173 - open `http://localhost:5173` in your browser)*
+*(Runs on port 3000 - open `http://localhost:3000` in your browser)*
 
 ### 3. Generate Hardware Data (Simulator)
 ```bash
@@ -50,6 +50,4 @@ python simulate_hardware.py --duration 60
 ```
 *(Watch the live dashboard as the python script fakes athlete jumps!)*
 
-## Team Configuration
-You can edit the project title, subtitle, and team member names without touching JSX. 
-Simply edit: `biomech-dashboard/src/lib/config.js`
+
