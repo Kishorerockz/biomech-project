@@ -1,4 +1,8 @@
 import { useState, useEffect } from 'react';
+<<<<<<< HEAD
+=======
+import { io } from 'socket.io-client';
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 import { motion, AnimatePresence } from 'motion/react';
 import { TabType, SensorState, AthleteProfile, SessionData } from './types';
 import {
@@ -52,12 +56,59 @@ export default function App() {
     return saved ? JSON.parse(saved) : INITIAL_ATHLETE_PROFILE;
   });
 
+<<<<<<< HEAD
+=======
+  // Fetch session history from backend on mount
+  useEffect(() => {
+    const fetchHistory = async () => {
+      try {
+        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+        const res = await fetch(`${backendUrl}/api/sessions/history/${athleteProfile.name}`);
+        if (!res.ok) throw new Error('Failed to fetch history');
+        
+        const rawSessions = await res.json();
+        const mappedSessions: SessionData[] = rawSessions.map((s: any) => ({
+          id: s.sessionId,
+          title: `${s.sessionType} Session`,
+          sport: s.sessionType,
+          date: new Date(s.startTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          isoDate: new Date(s.startTime).toISOString().split('T')[0],
+          peakJumpCm: s.peakJumpCm || 0,
+          avgJumpCm: s.avgJumpCm || 0,
+          totalReps: s.totalReps || 0,
+          durationSec: s.endTime 
+            ? Math.floor((new Date(s.endTime).getTime() - new Date(s.startTime).getTime()) / 1000)
+            : 0,
+          intensityPercent: 0, // Not stored yet, could be derived from reps/duration
+          attempts: (s.attempts || []).map((a: any, i: number) => ({
+            id: i + 1,
+            timestampStr: new Date(a.timestamp).toISOString().substr(14, 5),
+            jumpCm: a.heightCm,
+            isPeak: a.heightCm === s.peakJumpCm,
+          })),
+          timeline: (s.attempts || []).map((a: any) => ({
+            timeSec: Math.floor((a.timestamp - new Date(s.startTime).getTime()) / 1000),
+            jumpCm: a.heightCm
+          }))
+        }));
+        
+        // Unconditionally set sessions to replace the local mock cache
+        setSessions(mappedSessions);
+      } catch (err) {
+        console.error("Failed to fetch session history:", err);
+      }
+    };
+    fetchHistory();
+  }, [athleteProfile.name]);
+
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
   const [sessions, setSessions] = useState<SessionData[]>(() => {
     const saved = localStorage.getItem('telemetry_sessions');
     return saved ? JSON.parse(saved) : HISTORICAL_SESSIONS;
   });
 
   const [currentSession, setCurrentSession] = useState<SessionData>(() => sessions[0]);
+<<<<<<< HEAD
   const [activeAthleteId, setActiveAthleteId] = useState<string>('sim_athlete');
 
   // Fetch real sessions dynamically when login changes
@@ -75,6 +126,8 @@ export default function App() {
       });
     });
   }, [activeAthleteId]);
+=======
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 
   // Sync to localStorage
   useEffect(() => {
@@ -93,6 +146,77 @@ export default function App() {
     localStorage.setItem('telemetry_sessions', JSON.stringify(sessions));
   }, [sessions]);
 
+<<<<<<< HEAD
+=======
+  // Socket.io integration
+  useEffect(() => {
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+    const socket = io(backendUrl);
+
+    socket.on('connect', () => {
+      setSensorState((prev) => ({ ...prev, connected: true, reconnecting: false }));
+    });
+
+    socket.on('disconnect', () => {
+      setSensorState((prev) => ({ ...prev, connected: false, reconnecting: true }));
+    });
+
+    socket.io.on('reconnect_attempt', () => {
+      setSensorState((prev) => ({ ...prev, connected: false, reconnecting: true }));
+    });
+
+    socket.io.on('reconnect_failed', () => {
+      setSensorState((prev) => ({ ...prev, connected: false, reconnecting: false }));
+    });
+
+    socket.on('dashboard_update', (data: any) => {
+      setSensorState((prev) => ({
+        ...prev,
+        procAccelG: data.processedAccel !== undefined ? data.processedAccel : prev.procAccelG,
+        batteryPercent: data.battery !== null ? data.battery : prev.batteryPercent,
+        connected: true,
+      }));
+    });
+
+    socket.on('jump_detected', (data: any) => {
+      const { heightCm } = data;
+      setSensorState((prev) => {
+        const newMax = Math.max(prev.maxJumpCm, heightCm);
+        const isNewPeak = heightCm > prev.maxJumpCm;
+        return {
+          ...prev,
+          lastJumpCm: heightCm,
+          maxJumpCm: newMax,
+          totalJumps: prev.totalJumps + 1,
+          isNewPeak,
+        };
+      });
+      // Record the jump in the current session
+      handleRecordJump(heightCm);
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []); // Run once on mount
+
+  // Live session timer
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (currentTab === 'live' && currentSession) {
+      interval = setInterval(() => {
+        setCurrentSession((prev) => {
+          if (!prev) return prev;
+          return { ...prev, durationSec: prev.durationSec + 1 };
+        });
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [currentTab, currentSession]);
+
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
   // Record Jump Attempt during Live session
   const handleRecordJump = (jumpCm: number) => {
     const now = new Date();
@@ -101,10 +225,17 @@ export default function App() {
       .toString()
       .padStart(2, '0')}`;
 
+<<<<<<< HEAD
     const isPeak = jumpCm >= sensorState.maxJumpCm;
     const isFatigue = jumpCm < 36.0;
 
     setCurrentSession((prev) => {
+=======
+    const isFatigue = jumpCm < 36.0;
+
+    setCurrentSession((prev) => {
+      const isPeak = jumpCm >= prev.peakJumpCm;
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
       const newAttemptId = prev.attempts.length + 1;
       const updatedAttempts = [
         ...prev.attempts,
@@ -117,23 +248,50 @@ export default function App() {
         },
       ];
 
+<<<<<<< HEAD
       const newPeak = Math.max(prev.peakJumpCm, jumpCm);
+=======
+      const newPeak = Math.max(prev.peakJumpCm || 0, jumpCm);
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
       const newTotal = updatedAttempts.length;
       const newAvg = parseFloat(
         (updatedAttempts.reduce((acc, a) => acc + a.jumpCm, 0) / newTotal).toFixed(1)
       );
+<<<<<<< HEAD
 
       return {
+=======
+      
+      const newTimeline = [
+        ...(prev.timeline || []),
+        { timeSec: prev.durationSec || 0, jumpCm }
+      ];
+
+      const updatedSession = {
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
         ...prev,
         peakJumpCm: newPeak,
         avgJumpCm: newAvg,
         totalReps: newTotal,
         attempts: updatedAttempts,
+<<<<<<< HEAD
       };
+=======
+        timeline: newTimeline,
+      };
+
+      // Keep the global sessions array in sync so we don't lose data when navigating
+      setSessions((prevSessions) => 
+        prevSessions.map(s => s.id === updatedSession.id ? updatedSession : s)
+      );
+
+      return updatedSession;
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
     });
   };
 
   // Start new live recording session
+<<<<<<< HEAD
   const handleTriggerSessionStart = () => {
     const newSession: SessionData = {
       id: `session-live-${Date.now()}`,
@@ -160,6 +318,44 @@ export default function App() {
     setCurrentSession(newSession);
     setSessions((prev) => [newSession, ...prev]);
     setCurrentTab('analysis');
+=======
+  const handleTriggerSessionStart = async () => {
+    try {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+      const res = await fetch(`${backendUrl}/api/sessions/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ athleteId: athleteProfile.name, sessionType: athleteProfile.primarySport })
+      });
+      
+      let sessionId = `session-live-${Date.now()}`;
+      if (res.ok) {
+        const data = await res.json();
+        sessionId = data.sessionId;
+      }
+
+      const newSession: SessionData = {
+        id: sessionId,
+        title: `${athleteProfile.primarySport} Live Stream`,
+        sport: athleteProfile.primarySport,
+        date: 'Today',
+        isoDate: new Date().toISOString().split('T')[0],
+        peakJumpCm: 0,
+        avgJumpCm: 0,
+        totalReps: 0,
+        durationSec: 0,
+        intensityPercent: 0,
+        attempts: [],
+        timeline: [],
+      };
+
+      setCurrentSession(newSession);
+      setSessions((prev) => [newSession, ...prev]);
+      // Remain on the 'live' tab to watch the telemetry
+    } catch (err) {
+      console.error("Failed to start session:", err);
+    }
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
   };
 
   // Select historical session for Debrief
@@ -188,6 +384,7 @@ export default function App() {
     return (
       <AuthScreen
         onLogin={(email) => {
+<<<<<<< HEAD
           const handleLogin = (email: string) => {
             if (email) {
               setAthleteProfile((prev) => ({ ...prev, email }));
@@ -202,11 +399,23 @@ export default function App() {
             }
           };
           handleLogin(email);
+=======
+          if (email) {
+            setAthleteProfile((prev) => ({ ...prev, email }));
+          }
+          setIsAuthenticated(true);
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
         }}
       />
     );
   }
 
+<<<<<<< HEAD
+=======
+  // Calculate true PB across all sessions (defaults to 0 if no jumps)
+  const allTimePbCm = sessions.reduce((max, s) => Math.max(max, s.peakJumpCm || 0), 0);
+
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
   return (
     <div className={`min-h-screen ${theme === 'light' ? 'bg-[#f8fafc] text-[#0f172a]' : 'bg-[#121212] text-[#e5e2e1]'} font-body-sm relative selection:bg-[#00fbfb] selection:text-black transition-colors duration-300`}>
       {/* Top Header */}
@@ -251,6 +460,10 @@ export default function App() {
               <AnalysisTab
                 currentSession={currentSession}
                 athleteProfile={athleteProfile}
+<<<<<<< HEAD
+=======
+                allTimePbCm={allTimePbCm}
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
                 onReturnHome={() => setCurrentTab('live')}
               />
             </motion.div>
@@ -267,6 +480,10 @@ export default function App() {
               <HistoryTab
                 sessions={sessions}
                 athleteProfile={athleteProfile}
+<<<<<<< HEAD
+=======
+                allTimePbCm={allTimePbCm}
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
                 onSelectSession={handleSelectSession}
                 onAddLogSession={handleAddLogSession}
               />
@@ -286,6 +503,10 @@ export default function App() {
                 setSensorState={setSensorState}
                 athleteProfile={athleteProfile}
                 setAthleteProfile={setAthleteProfile}
+<<<<<<< HEAD
+=======
+                sessionId={currentSession.id}
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
               />
             </motion.div>
           )}

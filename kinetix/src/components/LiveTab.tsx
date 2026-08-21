@@ -20,9 +20,20 @@ export const LiveTab: React.FC<LiveTabProps> = ({
 }) => {
   const [isSimulatingStream, setIsSimulatingStream] = useState(true);
   const [jumpAnimation, setJumpAnimation] = useState(false);
+<<<<<<< HEAD
   const [isConnected, setIsConnected] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dataPointsRef = useRef<number[]>([]);
+=======
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const dataPointsRef = useRef<number[]>([]);
+  const latestAccelRef = useRef<number>(sensorState.procAccelG || 1.0);
+
+  // Keep ref in sync with latest sensor state for the animation loop
+  useEffect(() => {
+    latestAccelRef.current = sensorState.procAccelG;
+  }, [sensorState.procAccelG]);
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 
   // Initialize buffer for accelerometer graph
   useEffect(() => {
@@ -31,6 +42,7 @@ export const LiveTab: React.FC<LiveTabProps> = ({
     dataPointsRef.current = initial;
   }, []);
 
+<<<<<<< HEAD
   // Socket.io Integration
   useEffect(() => {
     import('../utils/socket').then(({ socketService }) => {
@@ -117,6 +129,17 @@ export const LiveTab: React.FC<LiveTabProps> = ({
     let animId: number;
 
     const render = () => {
+=======
+  // Animate accelerometer waveform
+  useEffect(() => {
+    if (!isSimulatingStream) return;
+
+    let animId: number;
+    let step = 0;
+
+    const render = () => {
+      step++;
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
       const canvas = canvasRef.current;
       if (canvas) {
         const ctx = canvas.getContext('2d');
@@ -124,6 +147,7 @@ export const LiveTab: React.FC<LiveTabProps> = ({
           const width = canvas.width;
           const height = canvas.height;
 
+<<<<<<< HEAD
           if (isSimulatingStream) {
              const points = dataPointsRef.current;
              points.shift();
@@ -133,6 +157,18 @@ export const LiveTab: React.FC<LiveTabProps> = ({
           }
 
           const points = dataPointsRef.current;
+=======
+          // Shift data points left
+          const points = dataPointsRef.current;
+          points.shift();
+
+          // Generate next accelerometer Z value from real telemetry
+          // Baseline is 1.0g. Map to canvas Y (center is ~50).
+          const currentG = latestAccelRef.current || 1.0;
+          const mappedY = 50 - (currentG - 1.0) * 25; 
+          const nextVal = Math.max(5, Math.min(95, mappedY));
+          points.push(nextVal);
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 
           // Draw Canvas background & grid
           ctx.clearRect(0, 0, width, height);
@@ -193,6 +229,7 @@ export const LiveTab: React.FC<LiveTabProps> = ({
     setAudioEnabled(!audioEnabled);
   };
 
+<<<<<<< HEAD
   // Trigger manual simulated jump
   const handleSimulateJump = () => {
     setJumpAnimation(true);
@@ -224,12 +261,15 @@ export const LiveTab: React.FC<LiveTabProps> = ({
       onRecordJump(newJump);
     }, 400);
   };
+=======
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 
   return (
     <div className="pt-20 md:pt-24 px-5 md:px-10 max-w-4xl mx-auto space-y-6 pb-48 flex flex-col items-center">
       {/* Top Telemetry Status Header */}
       <div className="w-full flex justify-between items-center bg-white/5 border border-white/10 px-5 py-3 rounded-2xl backdrop-blur-md gap-3">
         <div className="flex items-center gap-2">
+<<<<<<< HEAD
           <span className={`material-symbols-outlined ${isConnected ? 'text-[#c9a050]' : 'text-red-500'} filled`}>
             {isConnected ? 'sensors' : 'sensors_off'}
           </span>
@@ -237,6 +277,19 @@ export const LiveTab: React.FC<LiveTabProps> = ({
             {isConnected ? 'ESP32: CONNECTED' : 'RECONNECTING...'}
           </span>
           <div className={`w-2.5 h-2.5 rounded-full ml-1 ${isConnected ? 'bg-[#00ff7f] pulse-dot-green' : 'bg-red-500 animate-pulse'}`} />
+=======
+          <span className="material-symbols-outlined text-[#c9a050] filled">sensors</span>
+          <span className="font-data-label text-xs sm:text-sm text-white/80">
+            {sensorState.connected ? 'ESP32: CONNECTED' : sensorState.reconnecting ? 'RECONNECTING...' : 'ESP32: OFFLINE'}
+          </span>
+          <div className={`w-2.5 h-2.5 rounded-full ml-1 ${
+            sensorState.connected
+              ? 'bg-[#00ff7f] pulse-dot-green'
+              : sensorState.reconnecting
+              ? 'bg-amber-400 animate-pulse'
+              : 'bg-red-500'
+          }`} />
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
         </div>
 
         <div className="flex items-center gap-4">
@@ -304,6 +357,7 @@ export const LiveTab: React.FC<LiveTabProps> = ({
             </div>
           </div>
 
+<<<<<<< HEAD
           <div className="flex gap-2 mt-2">
             <button
               onClick={handleSimulateJump}
@@ -313,6 +367,8 @@ export const LiveTab: React.FC<LiveTabProps> = ({
               Simulate Spike Jump
             </button>
           </div>
+=======
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
         </div>
       </section>
 
@@ -411,6 +467,7 @@ export const LiveTab: React.FC<LiveTabProps> = ({
       </section>
 
       {/* Fixed Bottom Action Dock */}
+<<<<<<< HEAD
       <div className="fixed w-full z-40 bg-[#0a0a0a]/90 backdrop-blur-md border-t border-white/10 p-4 pb-6 md:pb-6 flex justify-center items-center shadow-[0_-10px_40px_rgba(0,0,0,0.8)] bottom-20 md:bottom-0">
         <button
           onClick={onTriggerSessionStart}
@@ -418,6 +475,22 @@ export const LiveTab: React.FC<LiveTabProps> = ({
         >
           <span className="material-symbols-outlined filled">play_circle</span>
           Trigger Session Start
+=======
+      <div className="fixed w-full z-40 bg-[#0a0a0a]/90 backdrop-blur-md border-t border-white/10 p-4 pb-6 md:pb-6 flex justify-center items-center shadow-[0_-10px_40px_rgba(0,0,0,0.8)] bottom-20 md:bottom-0 gap-3">
+        <button
+          onClick={onTriggerSessionStart}
+          className="flex-1 max-w-xs bg-[#c9a050] hover:bg-[#d9b060] text-black font-data-value text-sm py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 shadow-lg cursor-pointer uppercase tracking-[0.2em] font-bold"
+        >
+          <span className="material-symbols-outlined filled">play_circle</span>
+          Start Session
+        </button>
+        <button
+          onClick={() => onRecordJump(Math.floor(Math.random() * 20) + 35)}
+          className="flex-1 max-w-xs bg-emerald-500 hover:bg-emerald-400 text-black font-data-value text-sm py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 shadow-lg cursor-pointer uppercase tracking-[0.2em] font-bold"
+        >
+          <span className="material-symbols-outlined filled">bolt</span>
+          Simulate Jump
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
         </button>
       </div>
     </div>

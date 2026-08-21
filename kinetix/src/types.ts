@@ -25,6 +25,10 @@ export interface SessionData {
 
 export interface SensorState {
   connected: boolean;
+<<<<<<< HEAD
+=======
+  reconnecting?: boolean;
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
   deviceName: string;
   batteryPercent: number;
   signalDbm: number;

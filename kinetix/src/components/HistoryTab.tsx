@@ -6,6 +6,10 @@ import { formatMetricHeight } from '../data';
 interface HistoryTabProps {
   sessions: SessionData[];
   athleteProfile: AthleteProfile;
+<<<<<<< HEAD
+=======
+  allTimePbCm?: number;
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
   onSelectSession: (session: SessionData) => void;
   onAddLogSession: (newSession: SessionData) => void;
 }
@@ -13,6 +17,10 @@ interface HistoryTabProps {
 export const HistoryTab: React.FC<HistoryTabProps> = ({
   sessions,
   athleteProfile,
+<<<<<<< HEAD
+=======
+  allTimePbCm = 52.0,
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
   onSelectSession,
   onAddLogSession,
 }) => {
@@ -41,7 +49,37 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
   });
 
   // Calculate highest peak jump from current list
+<<<<<<< HEAD
   const maxPeak = Math.max(...filteredSessions.map((s) => s.peakJumpCm), 48.5);
+=======
+  const maxPeak = Math.max(...filteredSessions.map((s) => s.peakJumpCm || 0), 0) || 0;
+  
+  // Calculate dynamic goal and target zone (handle 0 PB gracefully)
+  const seasonGoal = allTimePbCm > 0 ? allTimePbCm * 1.1 : 0; // 10% higher than PB
+  const targetZoneMin = allTimePbCm > 0 ? allTimePbCm * 0.8 : 0;
+  const targetZoneMax = allTimePbCm > 0 ? allTimePbCm * 0.95 : 0;
+
+  // Calculate weekly average
+  const now = new Date();
+  const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+  const thisWeekSessions = filteredSessions.filter(s => new Date(s.isoDate || s.date) >= oneWeekAgo);
+  const lastWeekSessions = filteredSessions.filter(s => {
+    const d = new Date(s.isoDate || s.date);
+    return d >= twoWeeksAgo && d < oneWeekAgo;
+  });
+
+  const getAvg = (list: SessionData[]) => {
+    if (list.length === 0) return 0;
+    const sum = list.reduce((acc, s) => acc + (s.peakJumpCm || 0), 0);
+    return sum / list.length;
+  };
+
+  const weeklyAverage = getAvg(thisWeekSessions);
+  const lastWeeklyAverage = getAvg(lastWeekSessions);
+  const weeklyChange = lastWeeklyAverage > 0 ? ((weeklyAverage - lastWeeklyAverage) / lastWeeklyAverage) * 100 : 0;
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 
   const handleCreateSession = (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,6 +138,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
+<<<<<<< HEAD
           <button
             onClick={() => setShowLogModal(true)}
             className="bg-white/10 hover:bg-white/20 border border-[#c9a050]/50 text-[#c9a050] px-4 py-2 rounded-full font-data-label text-xs flex items-center gap-1.5 active:scale-95 transition-all shadow-md font-bold uppercase tracking-wider cursor-pointer"
@@ -107,6 +146,8 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
             <span className="material-symbols-outlined text-sm">add_circle</span>
             Log Session
           </button>
+=======
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 
           <div className="relative inline-block w-44">
             <select
@@ -157,9 +198,17 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
               </h2>
               <div className="font-display-metrics text-3xl md:text-4xl text-[#c9a050] mt-1 flex items-baseline gap-1">
                 {formatMetricHeight(maxPeak, athleteProfile.units)}
+<<<<<<< HEAD
                 <span className="text-xs font-data-label text-emerald-400 font-bold ml-2">
                   +4.2cm this month
                 </span>
+=======
+                {maxPeak > 0 && (
+                  <span className="text-xs font-data-label text-emerald-400 font-bold ml-2">
+                    {maxPeak >= allTimePbCm ? 'New PB!' : ''}
+                  </span>
+                )}
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
               </div>
             </div>
 
@@ -174,7 +223,11 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                 }`}
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+<<<<<<< HEAD
                 Goal: 58cm
+=======
+                Goal: {seasonGoal.toFixed(1)}cm
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
               </button>
               <button
                 onClick={() => setShowPBLine(!showPBLine)}
@@ -185,7 +238,11 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                 }`}
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-[#c9a050]" />
+<<<<<<< HEAD
                 PB: 54.5cm
+=======
+                PB: {allTimePbCm.toFixed(1)}cm
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
               </button>
               <button
                 onClick={() => setShowTargetZone(!showTargetZone)}
@@ -203,6 +260,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
 
           {/* SVG Progress Chart with Target Lines */}
           <div className="relative h-48 w-full mt-auto rounded-xl overflow-hidden border-b border-l border-white/10 pt-2">
+<<<<<<< HEAD
             {/* Target Training Zone Band (42cm - 52cm) */}
             {showTargetZone && (
               <div className="absolute top-[20%] bottom-[35%] w-full bg-emerald-500/5 border-y border-emerald-500/20 pointer-events-none z-0 flex items-center justify-end pr-2">
@@ -231,6 +289,55 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                 </span>
               </div>
             )}
+=======
+            {/* Target Training Zone Band */}
+            {showTargetZone && (() => {
+              const yMin = 100 - (targetZoneMax / (seasonGoal * 1.1)) * 100;
+              const yMax = 100 - (targetZoneMin / (seasonGoal * 1.1)) * 100;
+              return (
+                <div 
+                  className="absolute w-full bg-emerald-500/5 border-y border-emerald-500/20 pointer-events-none z-0 flex items-center justify-end pr-2"
+                  style={{ top: `${yMin}%`, height: `${yMax - yMin}%` }}
+                >
+                  <span className="text-[9px] font-data-label uppercase tracking-widest text-emerald-400/60 font-bold bg-[#0a0a0a]/80 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                    Target Zone ({targetZoneMin.toFixed(0)}–{targetZoneMax.toFixed(0)}cm)
+                  </span>
+                </div>
+              );
+            })()}
+
+            {/* Season Goal Line */}
+            {showGoalLine && (() => {
+              const goalY = 100 - (seasonGoal / (seasonGoal * 1.1)) * 100;
+              return (
+                <div 
+                  className="absolute w-full border-b border-dashed border-amber-400/80 opacity-90 flex items-center z-10"
+                  style={{ top: `${goalY}%` }}
+                >
+                  <span className="absolute right-2 -top-2.5 text-[9px] text-amber-300 font-data-label uppercase font-bold bg-[#0a0a0a] px-2 py-0.5 rounded border border-amber-500/40 shadow-sm flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[10px] text-amber-400">flag</span>
+                    Season Goal: {seasonGoal.toFixed(1)}cm
+                  </span>
+                </div>
+              );
+            })()}
+
+            {/* Personal Best (PB) Line */}
+            {showPBLine && (() => {
+              const pbY = 100 - (allTimePbCm / (seasonGoal * 1.1)) * 100;
+              return (
+                <div 
+                  className="absolute w-full border-b border-dashed border-[#c9a050] opacity-90 flex items-center z-10"
+                  style={{ top: `${pbY}%` }}
+                >
+                  <span className="absolute left-2 -top-2.5 text-[9px] text-[#c9a050] font-data-label uppercase font-bold bg-[#0a0a0a] px-2 py-0.5 rounded border border-[#c9a050]/40 shadow-sm flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[10px] text-[#c9a050]">emoji_events</span>
+                    Personal Best: {allTimePbCm.toFixed(1)}cm
+                  </span>
+                </div>
+              );
+            })()}
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 
             {/* Horizontal Grid lines */}
             <div className="absolute inset-0 flex flex-col justify-between pb-2 pointer-events-none">
@@ -239,6 +346,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
               <div className="border-t border-dashed border-white/10 w-full" />
             </div>
 
+<<<<<<< HEAD
             <svg className="absolute bottom-0 w-full h-full z-0" preserveAspectRatio="none" viewBox="0 0 100 100">
               <defs>
                 <linearGradient id="goldArea" x1="0" x2="0" y1="0" y2="1">
@@ -295,6 +403,68 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                 </div>
               </div>
             </div>
+=======
+            {(() => {
+              // We'll map up to the 10 oldest-to-newest sessions
+              const graphSessions = [...filteredSessions].reverse().slice(-10);
+              if (graphSessions.length === 0) {
+                return (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-white/30 text-sm font-data-label uppercase tracking-widest">No sessions recorded</span>
+                  </div>
+                );
+              }
+
+              const maxGraphY = seasonGoal > 0 ? seasonGoal * 1.1 : 50; // Fallback to 50cm scale if no jumps yet
+              const points = graphSessions.map((s, i) => {
+                const x = graphSessions.length > 1 ? (i / (graphSessions.length - 1)) * 100 : 50;
+                const y = 100 - ((s.peakJumpCm || 0) / maxGraphY) * 100;
+                return { x, y, session: s };
+              });
+
+              const dLine = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+              const dFill = `${dLine} L100,100 L0,100 Z`;
+
+              return (
+                <>
+                  <svg className="absolute bottom-0 w-full h-full z-0" preserveAspectRatio="none" viewBox="0 0 100 100">
+                    <defs>
+                      <linearGradient id="goldArea" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stopColor="#c9a050" stopOpacity="0.4" />
+                        <stop offset="100%" stopColor="#c9a050" stopOpacity="0" />
+                      </linearGradient>
+                    </defs>
+                    {points.length > 1 && (
+                      <path d={dFill} fill="url(#goldArea)" />
+                    )}
+                    <path d={dLine} fill="none" stroke="#c9a050" strokeWidth="2.5" />
+                  </svg>
+
+                  {/* Interactive Data Nodes on Trend Curve */}
+                  <div className="absolute inset-0 z-20 pointer-events-none">
+                    {points.map((p, i) => {
+                      const isPB = p.session.peakJumpCm && p.session.peakJumpCm >= allTimePbCm;
+                      return (
+                        <div 
+                          key={p.session.id} 
+                          className="absolute group/node pointer-events-auto cursor-pointer flex justify-center items-center"
+                          style={{ left: `${p.x}%`, top: `${p.y}%`, width: '16px', height: '16px', transform: 'translate(-50%, -50%)' }}
+                        >
+                          <div className={`rounded-full border border-black ${isPB ? 'w-3.5 h-3.5 bg-amber-400 border-2 shadow-[0_0_10px_rgba(251,191,36,0.9)] animate-bounce' : 'w-2.5 h-2.5 bg-emerald-400'}`} />
+                          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/node:flex flex-col items-center bg-[#131313] border border-white/20 px-2 py-1 rounded text-[10px] font-data-label text-white whitespace-nowrap shadow-xl z-30">
+                            <span className={isPB ? 'text-amber-300 font-bold' : 'text-emerald-400 font-bold'}>
+                              {p.session.date}: {p.session.peakJumpCm}cm {isPB ? '(PB!)' : ''}
+                            </span>
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#131313]" />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              );
+            })()}
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
           </div>
         </div>
 
@@ -305,12 +475,23 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
           </h3>
           <div className="font-headline-md text-lg text-white mb-1">Weekly Average</div>
           <div className="font-display-metrics text-4xl text-white flex items-baseline gap-1">
+<<<<<<< HEAD
             {formatMetricHeight(42.1, athleteProfile.units)}
           </div>
           <div className="font-data-label text-xs text-[#c9a050] mt-3 flex items-center gap-1 font-bold">
             <span className="material-symbols-outlined text-sm">arrow_upward</span>
             (+3.4% vs last week)
           </div>
+=======
+            {weeklyAverage > 0 ? formatMetricHeight(weeklyAverage, athleteProfile.units) : '--'}
+          </div>
+          {weeklyChange !== 0 && (
+            <div className={`font-data-label text-xs ${weeklyChange > 0 ? 'text-emerald-400' : 'text-red-400'} mt-3 flex items-center gap-1 font-bold`}>
+              <span className="material-symbols-outlined text-sm">{weeklyChange > 0 ? 'arrow_upward' : 'arrow_downward'}</span>
+              ({weeklyChange > 0 ? '+' : ''}{weeklyChange.toFixed(1)}% vs last week)
+            </div>
+          )}
+>>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
         </div>
 
         {/* History Feed */}
