@@ -2,8 +2,12 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    tags:
+      - 'v*'
   workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+
+permissions:
+  contents: write
 
 jobs:
   build-android:
@@ -18,19 +22,21 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: biomech-dashboard/package-lock.json
+          cache-dependency-path: kinetix/package-lock.json
 
       - name: Install Frontend Dependencies
-        working-directory: ./biomech-dashboard
+        working-directory: ./kinetix
         run: npm ci
 
       - name: Build Web Dashboard
-        working-directory: ./biomech-dashboard
+        working-directory: ./kinetix
         run: npm run build
 
       - name: Capacitor Sync
-        working-directory: ./biomech-dashboard
-        run: npx cap sync android
+        working-directory: ./kinetix
+        run: |
+          npx cap add android || true
+          npx cap sync android
 
       - name: Set up JDK 21
         uses: actions/setup-java@v3
@@ -40,15 +46,23 @@ jobs:
           cache: gradle
 
       - name: Make Gradle executable
-        working-directory: ./biomech-dashboard/android
+        working-directory: ./kinetix/android
         run: chmod +x ./gradlew
 
       - name: Build APK with Gradle
-        working-directory: ./biomech-dashboard/android
+        working-directory: ./kinetix/android
         run: ./gradlew assembleDebug
 
-      - name: Upload APK
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
-          path: biomech-dashboard/android/app/build/outputs/apk/debug/app-debug.apk
+          path: kinetix/android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: kinetix/android/app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
