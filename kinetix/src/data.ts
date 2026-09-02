@@ -15,10 +15,9 @@ export const INITIAL_ATHLETE_PROFILE: AthleteProfile = {
 
 export const INITIAL_SENSOR_STATE: SensorState = {
   connected: true,
-<<<<<<< HEAD
-=======
   reconnecting: false,
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
+  gyro: { x: 0, y: 0, z: 0 },
+  accel: { x: 0, y: 1, z: 0 },
   deviceName: 'ESP32 Sensor Unit',
   batteryPercent: 88,
   signalDbm: -52,

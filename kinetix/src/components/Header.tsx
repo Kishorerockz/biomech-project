@@ -80,25 +80,10 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="flex items-center gap-1.5 ml-3 bg-[#1c1b1b] px-3 py-1 rounded-full border border-[#2a2a2a] text-xs font-data-label text-[#b9cac9]">
             <span
               className={`w-2 h-2 rounded-full ${
-<<<<<<< HEAD
                 sensorState.connected ? 'bg-[#00ff7f] pulse-dot-green' : 'bg-red-500'
               }`}
             />
             {sensorState.connected ? 'ESP32: CONNECTED' : 'OFFLINE'}
-=======
-                sensorState.connected
-                  ? 'bg-[#00ff7f] pulse-dot-green'
-                  : sensorState.reconnecting
-                  ? 'bg-amber-400 animate-pulse'
-                  : 'bg-red-500'
-              }`}
-            />
-            {sensorState.connected
-              ? 'ESP32: CONNECTED'
-              : sensorState.reconnecting
-              ? 'RECONNECTING...'
-              : 'OFFLINE'}
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
           </span>
         </div>
 

@@ -21,14 +21,15 @@ export interface SessionData {
   intensityPercent: number; // e.g. 92
   attempts: JumpAttempt[];
   timeline: { timeSec: number; jumpCm: number }[];
+  jumpConsistencyCm?: number;
+  jumpHeights?: number[];
 }
 
 export interface SensorState {
   connected: boolean;
-<<<<<<< HEAD
-=======
   reconnecting?: boolean;
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
+  gyro?: { x: number; y: number; z: number };
+  accel?: { x: number; y: number; z: number };
   deviceName: string;
   batteryPercent: number;
   signalDbm: number;
@@ -39,10 +40,30 @@ export interface SensorState {
   maxJumpCm: number;
   totalJumps: number;
   isNewPeak: boolean;
+  hangTimeMs?: number;
+  landingImpactG?: number;
+  takeoffAccelG?: number;
+  twistDeg?: number;
+  swingCount?: number;
+  lastSwingVelocity?: number;
+  lastSwingDurationMs?: number;
+  orientation?: { x: number; y: number; z: number; w: number };
+  streamHz?: number;
+}
+
+export interface HistoryResponse {
+  sessions: any[]; // The raw JSON before mapping
+  stats: {
+    personalBest: number;
+    targetZoneMin: number;
+    targetZoneMax: number;
+    fatigueThreshold: number;
+  };
 }
 
 export interface AthleteProfile {
   name: string;
+  email?: string;
   role: string;
   primarySport: string;
   weightKg: number;

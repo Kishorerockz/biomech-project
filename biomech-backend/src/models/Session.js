@@ -61,6 +61,16 @@ const sessionSchema = new mongoose.Schema(
         timestamp: Number,
       }
     ],
+    /* ---- Phase 3 Expansion Metrics ---- */
+    jumpCount: { type: Number, default: 0 },
+    maxHangTimeMs: { type: Number, default: 0 },
+    maxLandingImpactG: { type: Number, default: 0 },
+    maxTakeoffAccelG: { type: Number, default: 0 },
+    jumpHeights: { type: [Number], default: [] },
+    jumpConsistencyCm: { type: Number, default: null },
+    maxTwistDeg: { type: Number, default: 0 },
+    maxSwingAngularVelocity: { type: Number, default: 0 },
+    maxSwingDurationMs: { type: Number, default: 0 },
     /* ---- Calibration (populated in Phase 3) ---- */
     calibrationOffset: {
       accel: {

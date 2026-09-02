@@ -8,10 +8,6 @@ interface CalibrationTabProps {
   setSensorState: React.Dispatch<React.SetStateAction<SensorState>>;
   athleteProfile: AthleteProfile;
   setAthleteProfile: React.Dispatch<React.SetStateAction<AthleteProfile>>;
-<<<<<<< HEAD
-=======
-  sessionId: string;
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 }
 
 export const CalibrationTab: React.FC<CalibrationTabProps> = ({
@@ -19,10 +15,6 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
   setSensorState,
   athleteProfile,
   setAthleteProfile,
-<<<<<<< HEAD
-=======
-  sessionId,
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 }) => {
   const [calibrationState, setCalibrationState] = useState<'idle' | 'calibrating' | 'success'>(
     'idle'
@@ -49,34 +41,12 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
     );
   };
 
-<<<<<<< HEAD
   const handleCalibrate = () => {
-=======
-  const handleCalibrate = async () => {
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
     if (calibrationState !== 'idle') return;
 
     setCalibrationState('calibrating');
 
-<<<<<<< HEAD
     setTimeout(() => {
-=======
-    try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
-      // Sending mock samples for zero-g calibration (assuming stationary state)
-      const samples = Array(20).fill({
-        accel: { x: 0.01, y: 0.02, z: 1.03 },
-        gyro: { x: 0, y: 0, z: 0 }
-      });
-      const res = await fetch(`${backendUrl}/api/sessions/${sessionId}/calibrate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ samples })
-      });
-      
-      if (!res.ok) throw new Error('Calibration failed');
-      
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
       setCalibrationState('success');
       setSensorState((prev) => ({
         ...prev,
@@ -86,14 +56,7 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
       setTimeout(() => {
         setCalibrationState('idle');
       }, 2500);
-<<<<<<< HEAD
     }, 3000);
-=======
-    } catch (err) {
-      console.error(err);
-      setCalibrationState('idle');
-    }
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
   };
 
   const handleSliderChange = (val: number) => {
@@ -137,25 +100,10 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
                 <p className="font-data-label text-xs text-white/50 flex items-center gap-1.5">
                   <span
                     className={`w-2 h-2 rounded-full inline-block ${
-<<<<<<< HEAD
                       sensorState.connected ? 'bg-[#00ff7f] pulse-dot-green' : 'bg-red-500'
                     }`}
                   />
                   {sensorState.connected ? 'Connected' : 'Disconnected'}
-=======
-                      sensorState.connected
-                        ? 'bg-[#00ff7f] pulse-dot-green'
-                        : sensorState.reconnecting
-                        ? 'bg-amber-400 animate-pulse'
-                        : 'bg-red-500'
-                    }`}
-                  />
-                  {sensorState.connected
-                    ? 'Connected'
-                    : sensorState.reconnecting
-                    ? 'Reconnecting...'
-                    : 'Disconnected'}
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
                 </p>
               </div>
               <span className="material-symbols-outlined text-[#c9a050] text-2xl">
@@ -196,7 +144,6 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
               </div>
             </div>
 
-<<<<<<< HEAD
             {/* Bluetooth LE Direct Scan & Pair Button */}
             <div className="mt-2 border-t border-white/10 pt-4 flex flex-col gap-2">
               <button
@@ -213,8 +160,6 @@ export const CalibrationTab: React.FC<CalibrationTabProps> = ({
                 </p>
               )}
             </div>
-=======
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
           </div>
 
           {/* Zero-G Calibration Section */}

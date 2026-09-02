@@ -10,6 +10,14 @@ const router = express.Router();
 const inMemorySessions = new Map();
 const inMemoryTelemetry = new Map();
 
+function calculateStdDev(values) {
+  if (!values || values.length < 2) return null;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / values.length;
+  const stdDev = Math.sqrt(variance);
+  return Math.round(stdDev * 10) / 10;
+}
+
 /* ─────────────────────────────────────────────
    1. POST /api/sessions/start
    Body: { athleteId, sessionType }
@@ -110,6 +118,10 @@ router.post("/:sessionId/end", async (req, res) => {
     session.avgJumpCm = avgJumpCm;
     session.totalReps = jumps.length;
     session.attempts = jumps;
+    
+    // Task C: Consistency metric
+    const sessionJumpHeights = jumps.map(j => j.heightCm); // Extract jump heights
+    session.jumpConsistencyCm = calculateStdDev(sessionJumpHeights);
 
     if (mongoose.connection.readyState === 1) {
       await session.save();
@@ -287,10 +299,146 @@ router.get("/history/:athleteId", async (req, res) => {
       const sessions = Array.from(inMemorySessions.values()).filter(
         (s) => s.athleteId === athleteId
       );
-      return res.json(sessions);
+      sessions.sort((a, b) => b.createdAt - a.createdAt);
     }
+
+    let allTimePbCm = 0;
+    sessions.forEach(s => {
+      const peak = s.sessionType === 'cricket' ? (s.maxSwingAngularVelocity || 0) : (s.peakJumpCm || 0);
+      if (peak > allTimePbCm) allTimePbCm = peak;
+    });
+
+    const targetZoneMin = Math.round(allTimePbCm * 0.85 * 10) / 10;
+    const targetZoneMax = Math.round(allTimePbCm * 1.1 * 10) / 10;
+    const fatigueThreshold = Math.round(allTimePbCm * 0.7 * 10) / 10;
+
+    return res.json({
+      sessions,
+      stats: {
+        personalBest: allTimePbCm,
+        targetZoneMin,
+        targetZoneMax,
+        fatigueThreshold
+      }
+    });
   } catch (err) {
     console.error("GET /history/:athleteId error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────
+   6. GET /api/sessions/:sessionId/export.csv
+   ───────────────────────────────────────────── */
+router.get("/:sessionId/export.csv", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    let session;
+    if (mongoose.connection.readyState === 1) {
+      session = await Session.findOne({ sessionId }).lean();
+    } else {
+      session = inMemorySessions.get(sessionId);
+    }
+    if (!session) return res.status(404).json({ error: "Session not found" });
+
+    let csv = "Rep_ID,Timestamp,Metric_Value\n";
+    const attempts = global.sessionJumps ? (global.sessionJumps[sessionId] || session.attempts || []) : (session.attempts || []);
+    
+    attempts.forEach((a, index) => {
+      const metric = a.heightCm || a.peakAngularVelocity || 0;
+      csv += `${index + 1},${a.timestamp || ''},${metric}\n`;
+    });
+
+    res.header('Content-Type', 'text/csv');
+    res.attachment(`session_${sessionId.slice(0, 8)}.csv`);
+    return res.send(csv);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────
+   7. GET /api/sessions/history/:athleteId/trend
+   Task 3 & 5: Trend Endpoint w/ Week-over-Week
+   ───────────────────────────────────────────── */
+const TARGET_ZONE_MIN_MULTIPLIER = 0.85;
+const TARGET_ZONE_MAX_MULTIPLIER = 1.00;
+const FATIGUE_THRESHOLD_MULTIPLIER = 0.80; // 20% below trailing average
+
+router.get("/history/:athleteId/trend", async (req, res) => {
+  try {
+    const { athleteId } = req.params;
+    let sessions = [];
+    if (mongoose.connection.readyState === 1) {
+      sessions = await Session.find({ athleteId, status: "completed" }).sort({ createdAt: -1 }).lean();
+    } else {
+      sessions = Array.from(inMemorySessions.values()).filter(s => s.athleteId === athleteId && s.status === "completed");
+      sessions.sort((a, b) => b.createdAt - a.createdAt);
+    }
+    
+    // Sort chronological so trailing elements are older
+    sessions.reverse();
+
+    const trendData = sessions.slice(-10).map((s) => {
+      const isCricket = s.sessionType === 'cricket';
+      const peak = isCricket ? (s.maxSwingAngularVelocity || 0) : (s.peakJumpCm || 0);
+      const avg = isCricket ? peak : (s.avgJumpCm || 0); // Fake avg for cricket until implemented
+      
+      let currentPB = 0;
+      sessions.slice(0, sessions.indexOf(s) + 1).forEach(histItem => {
+        const hPeak = histItem.sessionType === 'cricket' ? (histItem.maxSwingAngularVelocity || 0) : (histItem.peakJumpCm || 0);
+        if (hPeak > currentPB) currentPB = hPeak;
+      });
+
+      const targetZoneMin = Math.round(currentPB * TARGET_ZONE_MIN_MULTIPLIER * 10) / 10;
+      const targetZoneMax = Math.round(currentPB * TARGET_ZONE_MAX_MULTIPLIER * 10) / 10;
+      
+      const trailing5 = sessions.slice(Math.max(0, sessions.indexOf(s) - 5), sessions.indexOf(s));
+      let trailingAvg = 0;
+      if (trailing5.length > 0) {
+        trailingAvg = trailing5.reduce((acc, ts) => acc + (ts.sessionType === 'cricket' ? (ts.maxSwingAngularVelocity || 0) : ts.avgJumpCm), 0) / trailing5.length;
+      }
+      
+      const isFatigueFlag = trailing5.length > 0 ? (avg < (trailingAvg * FATIGUE_THRESHOLD_MULTIPLIER)) : false;
+
+      return {
+        sessionId: s.sessionId,
+        date: s.startTime || s.createdAt,
+        peakMetricValue: peak,
+        personalBest: currentPB,
+        targetZoneMin,
+        targetZoneMax,
+        isFatigueFlag
+      };
+    });
+
+    const now = new Date();
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+    const thisWeekSessions = sessions.filter(s => new Date(s.createdAt) >= oneWeekAgo);
+    const lastWeekSessions = sessions.filter(s => {
+      const d = new Date(s.createdAt);
+      return d >= twoWeeksAgo && d < oneWeekAgo;
+    });
+
+    let weekOverWeekChangePercent = null;
+    if (thisWeekSessions.length > 0 && lastWeekSessions.length > 0) {
+      const thisWeekPeakAvg = thisWeekSessions.reduce((acc, s) => acc + (s.sessionType === 'cricket' ? (s.maxSwingAngularVelocity || 0) : (s.peakJumpCm || 0)), 0) / thisWeekSessions.length;
+      const lastWeekPeakAvg = lastWeekSessions.reduce((acc, s) => acc + (s.sessionType === 'cricket' ? (s.maxSwingAngularVelocity || 0) : (s.peakJumpCm || 0)), 0) / lastWeekSessions.length;
+      
+      if (lastWeekPeakAvg > 0) {
+        weekOverWeekChangePercent = Math.round(((thisWeekPeakAvg - lastWeekPeakAvg) / lastWeekPeakAvg) * 100 * 10) / 10;
+      }
+    }
+
+    return res.json({
+      trends: trendData,
+      weekOverWeekChangePercent
+    });
+
+  } catch (err) {
+    console.error("GET /history/:athleteId/trend error:", err);
     res.status(500).json({ error: err.message });
   }
 });

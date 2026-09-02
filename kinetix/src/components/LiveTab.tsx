@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { SensorState, AthleteProfile } from '../types';
+import { SensorState, AthleteProfile, SessionData } from '../types';
 import { formatMetricHeight } from '../data';
 import { audioEngine } from '../utils/audio';
+import { JumpAvatar } from './JumpAvatar';
 
 interface LiveTabProps {
   sensorState: SensorState;
   setSensorState: React.Dispatch<React.SetStateAction<SensorState>>;
   athleteProfile: AthleteProfile;
+  currentSession: SessionData | undefined; // Task 6: Read sport dynamically from active session
   onTriggerSessionStart: () => void;
   onRecordJump: (jumpCm: number) => void;
 }
@@ -15,25 +17,24 @@ export const LiveTab: React.FC<LiveTabProps> = ({
   sensorState,
   setSensorState,
   athleteProfile,
+  currentSession,
   onTriggerSessionStart,
   onRecordJump,
 }) => {
   const [isSimulatingStream, setIsSimulatingStream] = useState(true);
   const [jumpAnimation, setJumpAnimation] = useState(false);
-<<<<<<< HEAD
-  const [isConnected, setIsConnected] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const dataPointsRef = useRef<number[]>([]);
-=======
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dataPointsRef = useRef<number[]>([]);
   const latestAccelRef = useRef<number>(sensorState.procAccelG || 1.0);
+  const [isConnected, setIsConnected] = useState(false);
 
-  // Keep ref in sync with latest sensor state for the animation loop
+  // Compute active sport (backend truth prioritized over profile setting)
+  const activeSport = (currentSession ? currentSession.sport : athleteProfile.primarySport).toLowerCase();
+
   useEffect(() => {
     latestAccelRef.current = sensorState.procAccelG;
-  }, [sensorState.procAccelG]);
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
+    setIsConnected(sensorState.connected);
+  }, [sensorState]);
 
   // Initialize buffer for accelerometer graph
   useEffect(() => {
@@ -42,104 +43,13 @@ export const LiveTab: React.FC<LiveTabProps> = ({
     dataPointsRef.current = initial;
   }, []);
 
-<<<<<<< HEAD
-  // Socket.io Integration
-  useEffect(() => {
-    import('../utils/socket').then(({ socketService }) => {
-      socketService.connect();
-
-      const handleDashboardUpdate = (data: any) => {
-        if (!socketService.socket) return;
-        
-        // Update sensor state
-        setSensorState(prev => ({ 
-          ...prev, 
-          procAccelG: typeof data.processedAccel === 'number' ? data.processedAccel : prev.procAccelG, 
-          batteryPercent: typeof data.battery === 'number' ? data.battery : prev.batteryPercent 
-        }));
-
-        // Update waveform points
-        const points = dataPointsRef.current;
-        points.shift();
-        
-        // Z-axis data from accel or processedAccel
-        const rawZ = data.accel?.z || Math.random() * 2;
-        // scale to canvas 10-90
-        const yVal = Math.max(10, Math.min(90, 50 + (rawZ * 15)));
-        points.push(yVal);
-      };
-
-      const handleJumpDetected = (data: any) => {
-        const newJump = data.heightCm;
-        setJumpAnimation(true);
-        
-        // Visual indicator of jump spike on canvas
-        const points = dataPointsRef.current;
-        if (points.length > 10) {
-          points[points.length - 8] = 95;
-          points[points.length - 6] = 10;
-          points[points.length - 4] = 85;
-          points[points.length - 2] = 30;
-        }
-
-        setTimeout(() => {
-          setJumpAnimation(false);
-          
-          setSensorState(prev => {
-            const isPeak = newJump > prev.maxJumpCm;
-            audioEngine.playJumpChime(isPeak); // Play sound dynamically based on correct prev
-            
-            return {
-              ...prev,
-              lastJumpCm: newJump,
-              maxJumpCm: Math.max(prev.maxJumpCm, newJump),
-              totalJumps: prev.totalJumps + 1,
-              isNewPeak: isPeak,
-            };
-          });
-          
-          onRecordJump(newJump);
-        }, 400);
-      };
-
-      if (socketService.socket) {
-        setIsConnected(true);
-        socketService.socket.on('dashboard_update', handleDashboardUpdate);
-        socketService.socket.on('jump_detected', handleJumpDetected);
-        socketService.socket.on('connect', () => setIsConnected(true));
-        socketService.socket.on('disconnect', () => setIsConnected(false));
-      }
-      
-    });
-
-    return () => {
-      import('../utils/socket').then(({ socketService }) => {
-        if (socketService.socket) {
-          socketService.socket.off('dashboard_update');
-          socketService.socket.off('jump_detected');
-          socketService.socket.off('connect');
-          socketService.socket.off('disconnect');
-        }
-      });
-    };
-  }, [setSensorState, onRecordJump]);
-
-  // Animate accelerometer waveform loop for rendering
-  useEffect(() => {
-    let animId: number;
-
-    const render = () => {
-=======
   // Animate accelerometer waveform
   useEffect(() => {
     if (!isSimulatingStream) return;
 
     let animId: number;
-    let step = 0;
 
     const render = () => {
-      step++;
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
       const canvas = canvasRef.current;
       if (canvas) {
         const ctx = canvas.getContext('2d');
@@ -147,28 +57,20 @@ export const LiveTab: React.FC<LiveTabProps> = ({
           const width = canvas.width;
           const height = canvas.height;
 
-<<<<<<< HEAD
-          if (isSimulatingStream) {
-             const points = dataPointsRef.current;
-             points.shift();
-             let noise = (Math.random() - 0.5) * 6;
-             if (Math.random() < 0.02) noise = (Math.random() > 0.5 ? 1 : -1) * (25 + Math.random() * 20);
-             points.push(Math.max(10, Math.min(90, 50 + noise)));
-          }
-
-          const points = dataPointsRef.current;
-=======
           // Shift data points left
           const points = dataPointsRef.current;
           points.shift();
 
           // Generate next accelerometer Z value from real telemetry
-          // Baseline is 1.0g. Map to canvas Y (center is ~50).
           const currentG = latestAccelRef.current || 1.0;
           const mappedY = 50 - (currentG - 1.0) * 25; 
-          const nextVal = Math.max(5, Math.min(95, mappedY));
+          
+          let noise = 0;
+          if (!isConnected && isSimulatingStream) {
+            noise = (Math.random() - 0.5) * 6;
+          }
+          const nextVal = Math.max(5, Math.min(95, mappedY + noise));
           points.push(nextVal);
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 
           // Draw Canvas background & grid
           ctx.clearRect(0, 0, width, height);
@@ -219,7 +121,7 @@ export const LiveTab: React.FC<LiveTabProps> = ({
 
     animId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animId);
-  }, [isSimulatingStream]);
+  }, [isSimulatingStream, isConnected]);
 
   // Sound Feedback Toggle State
   const [audioEnabled, setAudioEnabled] = useState(true);
@@ -229,11 +131,9 @@ export const LiveTab: React.FC<LiveTabProps> = ({
     setAudioEnabled(!audioEnabled);
   };
 
-<<<<<<< HEAD
-  // Trigger manual simulated jump
   const handleSimulateJump = () => {
     setJumpAnimation(true);
-    const newJump = parseFloat((42 + Math.random() * 7).toFixed(1)); // 42.0 to 49.0 cm
+    const newJump = parseFloat((42 + Math.random() * 7).toFixed(1)); 
     
     // Inject a massive waveform spike
     const points = dataPointsRef.current;
@@ -246,50 +146,48 @@ export const LiveTab: React.FC<LiveTabProps> = ({
 
     setTimeout(() => {
       setJumpAnimation(false);
-      const isPeak = newJump > sensorState.maxJumpCm;
+      const isCricket = activeSport === 'cricket';
+      const isPeak = isCricket ? newJump > (sensorState.lastSwingVelocity || 0) : newJump > sensorState.maxJumpCm;
       
-      // Play synthesis audio feedback chime
       audioEngine.playJumpChime(isPeak);
 
-      setSensorState((prev) => ({
-        ...prev,
-        lastJumpCm: newJump,
-        maxJumpCm: Math.max(prev.maxJumpCm, newJump),
-        totalJumps: prev.totalJumps + 1,
-        isNewPeak: isPeak,
-      }));
+      if (isCricket) {
+        setSensorState((prev) => ({
+          ...prev,
+          lastSwingVelocity: newJump * 20, // Scale it to look like a swing (e.g., 900 deg/s)
+          maxJumpCm: Math.max(prev.maxJumpCm, newJump * 20),
+          swingCount: (prev.swingCount || 0) + 1,
+          lastSwingDurationMs: Math.floor(300 + Math.random() * 150),
+          isNewPeak: isPeak,
+        }));
+      } else {
+        setSensorState((prev) => ({
+          ...prev,
+          lastJumpCm: newJump,
+          maxJumpCm: Math.max(prev.maxJumpCm, newJump),
+          totalJumps: prev.totalJumps + 1,
+          hangTimeMs: Math.floor(450 + Math.random() * 200),
+          landingImpactG: parseFloat((2.5 + Math.random() * 2).toFixed(1)),
+          takeoffAccelG: parseFloat((1.8 + Math.random() * 1.5).toFixed(1)),
+          isNewPeak: isPeak,
+        }));
+      }
       onRecordJump(newJump);
     }, 400);
   };
-=======
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
 
   return (
     <div className="pt-20 md:pt-24 px-5 md:px-10 max-w-4xl mx-auto space-y-6 pb-48 flex flex-col items-center">
       {/* Top Telemetry Status Header */}
       <div className="w-full flex justify-between items-center bg-white/5 border border-white/10 px-5 py-3 rounded-2xl backdrop-blur-md gap-3">
         <div className="flex items-center gap-2">
-<<<<<<< HEAD
           <span className={`material-symbols-outlined ${isConnected ? 'text-[#c9a050]' : 'text-red-500'} filled`}>
             {isConnected ? 'sensors' : 'sensors_off'}
           </span>
           <span className="font-data-label text-xs sm:text-sm text-white/80">
-            {isConnected ? 'ESP32: CONNECTED' : 'RECONNECTING...'}
+            {isConnected ? 'ESP32: CONNECTED' : 'OFFLINE'}
           </span>
           <div className={`w-2.5 h-2.5 rounded-full ml-1 ${isConnected ? 'bg-[#00ff7f] pulse-dot-green' : 'bg-red-500 animate-pulse'}`} />
-=======
-          <span className="material-symbols-outlined text-[#c9a050] filled">sensors</span>
-          <span className="font-data-label text-xs sm:text-sm text-white/80">
-            {sensorState.connected ? 'ESP32: CONNECTED' : sensorState.reconnecting ? 'RECONNECTING...' : 'ESP32: OFFLINE'}
-          </span>
-          <div className={`w-2.5 h-2.5 rounded-full ml-1 ${
-            sensorState.connected
-              ? 'bg-[#00ff7f] pulse-dot-green'
-              : sensorState.reconnecting
-              ? 'bg-amber-400 animate-pulse'
-              : 'bg-red-500'
-          }`} />
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
         </div>
 
         <div className="flex items-center gap-4">
@@ -323,12 +221,9 @@ export const LiveTab: React.FC<LiveTabProps> = ({
       {/* Hero Card: Massive Centered Card for Last Jump */}
       <section className="w-full max-w-md">
         <div className="card-base p-6 md:p-8 relative flex flex-col items-center justify-center text-center overflow-hidden border border-white/10 bg-white/5 backdrop-blur-md shadow-2xl">
-          {/* Radial gold glow effect */}
           <div
             className="absolute inset-0 opacity-15 pointer-events-none"
-            style={{
-              backgroundImage: 'radial-gradient(circle at center, #c9a050 0%, transparent 75%)',
-            }}
+            style={{ backgroundImage: 'radial-gradient(circle at center, #c9a050 0%, transparent 75%)' }}
           />
 
           <div className="mt-2 mb-4 flex flex-col items-center">
@@ -341,35 +236,42 @@ export const LiveTab: React.FC<LiveTabProps> = ({
               </div>
             )}
             <h2 className="font-data-label text-xs text-white/50 tracking-[0.3em] uppercase mb-2 font-bold">
-              Last Jump
+              {activeSport === 'cricket' ? 'Last Swing' : 'Last Jump'}
             </h2>
             <div
               className={`font-display-metrics text-5xl md:text-6xl text-[#c9a050] transition-transform duration-300 ${
                 jumpAnimation ? 'scale-110' : 'scale-100'
               }`}
             >
-              {athleteProfile.units === 'imperial'
-                ? (sensorState.lastJumpCm / 2.54).toFixed(1)
-                : sensorState.lastJumpCm.toFixed(1)}
-              <span className="text-xl md:text-2xl text-white/50 ml-1 font-body-lg">
-                {athleteProfile.units === 'imperial' ? 'in' : 'cm'}
-              </span>
+              {activeSport === 'cricket' ? (
+                <>
+                  {(sensorState.lastSwingVelocity || 0).toFixed(1)}
+                  <span className="text-xl md:text-2xl text-white/50 ml-1 font-body-lg">
+                    deg/s
+                  </span>
+                </>
+              ) : (
+                <>
+                  {athleteProfile.units === 'imperial'
+                    ? (sensorState.lastJumpCm / 2.54).toFixed(1)
+                    : sensorState.lastJumpCm.toFixed(1)}
+                  <span className="text-xl md:text-2xl text-white/50 ml-1 font-body-lg">
+                    {athleteProfile.units === 'imperial' ? 'in' : 'cm'}
+                  </span>
+                </>
+              )}
             </div>
           </div>
-
-<<<<<<< HEAD
-          <div className="flex gap-2 mt-2">
-            <button
-              onClick={handleSimulateJump}
-              className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-[#c9a050] rounded-full font-data-label text-xs flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer font-bold uppercase tracking-wider"
-            >
-              <span className="material-symbols-outlined text-sm">flight_takeoff</span>
-              Simulate Spike Jump
-            </button>
-          </div>
-=======
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
         </div>
+      </section>
+
+      {/* 3D Visualization */}
+      <section className="w-full max-w-3xl h-64 md:h-80 my-4">
+        <JumpAvatar 
+          gyro={sensorState.gyro || { x:0, y:0, z:0 }}
+          accel={sensorState.accel || { x:0, y:1, z:0 }}
+          connected={isConnected}
+        />
       </section>
 
       {/* Accelerometer Waveform Card */}
@@ -386,7 +288,6 @@ export const LiveTab: React.FC<LiveTabProps> = ({
             </span>
           </div>
 
-          {/* Real-time Canvas Waveform */}
           <div className="w-full h-36 bg-[#0a0a0a] rounded-xl border border-white/10 relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1/3 bg-gradient-to-b from-[#c9a050]/15 to-transparent pointer-events-none" />
             <canvas
@@ -400,82 +301,136 @@ export const LiveTab: React.FC<LiveTabProps> = ({
       </section>
 
       {/* Metrics Bento Grid */}
-      <section className="w-full max-w-3xl grid grid-cols-2 md:grid-cols-4 gap-3">
-        {/* Card 1: Max Jump */}
-        <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-          <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-            <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-              flight_takeoff
-            </span>
-          </div>
-          <div>
-            <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-              Max Jump
+      {activeSport === 'cricket' ? (
+        <section className="w-full max-w-3xl grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
+            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
+              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
+                repeat
+              </span>
             </div>
-            <div className="font-data-value text-lg text-white">
-              {formatMetricHeight(sensorState.maxJumpCm, athleteProfile.units)}
+            <div>
+              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
+                Total Swings
+              </div>
+              <div className="font-data-value text-lg text-white">
+                {sensorState.swingCount || 0}
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Card 2: Total Jumps */}
-        <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-          <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-            <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-              repeat
-            </span>
-          </div>
-          <div>
-            <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-              Total Jumps
+          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
+            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
+              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
+                schedule
+              </span>
             </div>
-            <div className="font-data-value text-lg text-white">{sensorState.totalJumps}</div>
+            <div>
+              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
+                Last Duration
+              </div>
+              <div className="font-data-value text-lg text-white">
+                {sensorState.lastSwingDurationMs ? `${(sensorState.lastSwingDurationMs/1000).toFixed(2)}s` : '--'}
+              </div>
+            </div>
           </div>
-        </div>
 
-        {/* Card 3: Proc Accel */}
-        <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-          <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-            <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-              speed
-            </span>
-          </div>
-          <div>
-            <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-              Proc. Accel
+          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
+            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
+              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
+                speed
+              </span>
             </div>
-            <div className="font-data-value text-lg text-white">{sensorState.procAccelG}g</div>
+            <div>
+              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
+                Proc. Accel
+              </div>
+              <div className="font-data-value text-lg text-white">{sensorState.procAccelG}g</div>
+            </div>
           </div>
-        </div>
 
-        {/* Card 4: Stream */}
-        <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-          <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-            <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-              wifi_tethering
-            </span>
-          </div>
-          <div>
-            <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-              Stream
+          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
+            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
+              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
+                wifi_tethering
+              </span>
             </div>
-            <div className="font-data-value text-lg text-white">
-              {sensorState.samplingRateHz}Hz
+            <div>
+              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
+                Stream
+              </div>
+              <div className="font-data-value text-lg text-white">
+                {sensorState.samplingRateHz}Hz
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      ) : (
+        <section className="w-full max-w-3xl grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
+            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
+              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
+                repeat
+              </span>
+            </div>
+            <div>
+              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
+                Total Jumps
+              </div>
+              <div className="font-data-value text-lg text-white">{sensorState.totalJumps}</div>
+            </div>
+          </div>
 
-      {/* Fixed Bottom Action Dock */}
-<<<<<<< HEAD
-      <div className="fixed w-full z-40 bg-[#0a0a0a]/90 backdrop-blur-md border-t border-white/10 p-4 pb-6 md:pb-6 flex justify-center items-center shadow-[0_-10px_40px_rgba(0,0,0,0.8)] bottom-20 md:bottom-0">
-        <button
-          onClick={onTriggerSessionStart}
-          className="w-full max-w-md bg-[#c9a050] hover:bg-[#d9b060] text-black font-data-value text-sm py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 shadow-lg cursor-pointer uppercase tracking-[0.2em] font-bold"
-        >
-          <span className="material-symbols-outlined filled">play_circle</span>
-          Trigger Session Start
-=======
+          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
+            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
+              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
+                timer
+              </span>
+            </div>
+            <div>
+              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
+                Hang Time
+              </div>
+              <div className="font-data-value text-lg text-white">
+                {sensorState.hangTimeMs ? `${sensorState.hangTimeMs}ms` : '--'}
+              </div>
+            </div>
+          </div>
+
+          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
+            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
+              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
+                arrow_downward
+              </span>
+            </div>
+            <div>
+              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
+                Landing Impact
+              </div>
+              <div className="font-data-value text-lg text-white">
+                {sensorState.landingImpactG ? `${sensorState.landingImpactG}g` : '--'}
+              </div>
+            </div>
+          </div>
+
+          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
+            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
+              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
+                arrow_upward
+              </span>
+            </div>
+            <div>
+              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
+                Takeoff Expl.
+              </div>
+              <div className="font-data-value text-lg text-white">
+                {sensorState.takeoffAccelG ? `${sensorState.takeoffAccelG}g` : '--'}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
       <div className="fixed w-full z-40 bg-[#0a0a0a]/90 backdrop-blur-md border-t border-white/10 p-4 pb-6 md:pb-6 flex justify-center items-center shadow-[0_-10px_40px_rgba(0,0,0,0.8)] bottom-20 md:bottom-0 gap-3">
         <button
           onClick={onTriggerSessionStart}
@@ -485,12 +440,11 @@ export const LiveTab: React.FC<LiveTabProps> = ({
           Start Session
         </button>
         <button
-          onClick={() => onRecordJump(Math.floor(Math.random() * 20) + 35)}
+          onClick={handleSimulateJump}
           className="flex-1 max-w-xs bg-emerald-500 hover:bg-emerald-400 text-black font-data-value text-sm py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 shadow-lg cursor-pointer uppercase tracking-[0.2em] font-bold"
         >
           <span className="material-symbols-outlined filled">bolt</span>
-          Simulate Jump
->>>>>>> 7bf54ac1d48f9945c9bcb53013d5c9ec7a37f242
+          {activeSport === 'cricket' ? 'Simulate Swing' : 'Simulate Jump'}
         </button>
       </div>
     </div>

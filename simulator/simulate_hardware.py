@@ -64,9 +64,33 @@ def generate_sample(elapsed: float) -> dict:
         az = 1.0 + 0.8 * (1 - frac)
 
     # ── Gyroscope (units: deg/sec) ─────────────────────────────────
-    gx = 15.0 * math.sin(2 * math.pi * cycle_frac)
-    gy = 10.0 * math.cos(2 * math.pi * cycle_frac * 2)
-    gz = 5.0 * math.sin(2 * math.pi * cycle_frac * 0.5)
+    if getattr(generate_sample, 'sport', 'volleyball') == 'cricket':
+        # Cricket swing pattern for gyro (peaking well over 700)
+        # IDLE: near 0
+        # WINDUP: crosses 150
+        # RELEASE: crosses 700 (e.g. 1500)
+        # FOLLOWTHROUGH: drops below 150
+        
+        gx, gy, gz = 0.0, 0.0, 0.0
+        
+        # We start swing at phase_t = 0.5s, windup to 1.0s, release peak at 1.5s, ends at 2.0s
+        if phase_t > 0.5 and phase_t < 2.0:
+            s_frac = (phase_t - 0.5) / 1.5  # 0 to 1 over the 1.5s window
+            # Use sin(pi * s_frac) to get a hump
+            # Multiply by a huge peak to easily clear 700
+            mag = 2000.0 * math.sin(s_frac * math.pi) ** 3
+            gx = mag * 0.5
+            gy = mag * 0.8
+            gz = mag * 0.3
+        else:
+            gx = 10.0 * math.sin(2 * math.pi * cycle_frac)
+            gy = 10.0 * math.cos(2 * math.pi * cycle_frac * 2)
+            gz = 5.0 * math.sin(2 * math.pi * cycle_frac * 0.5)
+            
+    else:
+        gx = 15.0 * math.sin(2 * math.pi * cycle_frac)
+        gy = 10.0 * math.cos(2 * math.pi * cycle_frac * 2)
+        gz = 5.0 * math.sin(2 * math.pi * cycle_frac * 0.5)
 
     return {
         "accel": {
@@ -99,9 +123,10 @@ def generate_stationary_sample() -> dict:
 
 
 class Simulator:
-    def __init__(self, host: str, duration: float):
+    def __init__(self, host: str, duration: float, sport: str = "volleyball"):
         self.host = host.rstrip("/")
         self.duration = duration
+        self.sport = sport
         self.session_id = None
         self.running = True
         self.battery = 100
@@ -121,7 +146,11 @@ class Simulator:
             self.jump_count += 1
             print(
                 f"   🦘  JUMP #{self.jump_count} detected! "
-                f"Height: {data['heightCm']} cm"
+                f"Height: {data.get('heightCm', 0)} cm, "
+                f"Hangtime: {data.get('hangTimeMs', 0)} ms, "
+                f"Takeoff: {data.get('takeoffAccelG', 0)}g, "
+                f"Landing: {data.get('landingImpactG', 0)}g, "
+                f"Twist: {data.get('twistDeg', 0)}°"
             )
 
         @self.sio.on("disconnect")
@@ -131,14 +160,14 @@ class Simulator:
     # ── API helpers (REST for session management) ─────────────────
     def start_session(self):
         url = f"{self.host}/api/sessions/start"
-        body = {"athleteId": "sim_athlete", "sessionType": "volleyball"}
+        body = {"athleteId": "sim_athlete", "sessionType": self.sport}
         resp = requests.post(url, json=body, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         self.session_id = data["sessionId"]
         print(f"\n🏐  Session started: {self.session_id}")
         print(f"    Athlete : sim_athlete")
-        print(f"    Type    : volleyball")
+        print(f"    Type    : {self.sport}")
         print(f"    Duration: {self.duration}s @ {SAMPLE_RATE_HZ} Hz\n")
 
     def calibrate(self):
@@ -178,6 +207,7 @@ class Simulator:
             print(f"  Peak Accel (g)    : {summary.get('peakAccelerationG', 0):.4f}")
             print(f"  Avg  Accel (g)    : {summary.get('avgAccelerationG', 0):.4f}")
             print(f"  Jumps Detected    : {self.jump_count}")
+            print(f"  Consistency (cm)  : {summary.get('jumpConsistencyCm')}")
             print(f"  Start Time        : {summary.get('startTime')}")
             print(f"  End Time          : {summary.get('endTime')}")
             print("=" * 55 + "\n")
@@ -271,9 +301,19 @@ def main():
         default=60,
         help="Simulation duration in seconds (default: 60)",
     )
+    parser.add_argument(
+        "--sport",
+        type=str,
+        default="volleyball",
+        choices=["volleyball", "cricket"],
+        help="Sport to simulate (volleyball or cricket)"
+    )
     args = parser.parse_args()
 
-    sim = Simulator(host=args.host, duration=args.duration)
+    # Pass the sport locally to generate_sample function attributes
+    generate_sample.sport = args.sport
+
+    sim = Simulator(host=args.host, duration=args.duration, sport=args.sport)
 
     def on_sigint(sig, frame):
         sim.stop()
