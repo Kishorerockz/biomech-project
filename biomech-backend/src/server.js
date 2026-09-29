@@ -88,13 +88,14 @@ async function getCalibration(sessionId) {
    TASK 3.4 — Signal processing + jump-detection state machine
    ══════════════════════════════════════════════════════════════════ */
 
-// ── Configurable thresholds (tune for real hardware) ─────────────
-// NOTE: These operate on RAW accel magnitude (includes gravity).
-// At rest ≈ 1g, takeoff push > 1.5g, freefall < 0.3g, landing > 1.5g.
-const TAKEOFF_THRESHOLD_G = 1.5;   // raw accel mag > this → TAKEOFF
-const FREEFALL_THRESHOLD_G = 0.3;  // raw accel mag < this → FREEFALL
-const LANDING_THRESHOLD_G = 1.5;   // raw accel mag > this → LANDING
-const MIN_FREEFALL_MS = 100;       // ignore micro-jumps shorter than this
+// ── Configurable thresholds — all in G-force units ─────────────
+// Firmware sends calibrated raw int16 values (±8g range → 4096 LSB/g).
+// At rest ≈ 1.0g. Takeoff push > 1.5g. Freefall < 0.55g. Landing > 1.5g.
+const LSB_PER_G = 4096.0;           // MPU-6050 ±8g range sensitivity
+const TAKEOFF_THRESHOLD_G = 1.5;    // accel mag (G) > this → TAKEOFF phase
+const FREEFALL_THRESHOLD_G = 0.55;  // accel mag (G) < this → FREEFALL (raised from 0.3 — athlete never reaches true 0g)
+const LANDING_THRESHOLD_G = 1.5;    // accel mag (G) > this → LANDING impact
+const MIN_FREEFALL_MS = 100;        // ignore micro-jumps shorter than this
 const GRAVITY_M_S2 = 9.81;
 
 const COMPLEMENTARY_FILTER_ALPHA = 0.98; // 98% gyro / 2% accel correction per step
@@ -176,18 +177,21 @@ function processPacket(packet, calibration, state) {
     z: packet.gyro.z - cal.gyro.z,
   };
 
-  // 2. Compute RAW accel magnitude (for jump detection — includes gravity)
-  const rawMag = Math.sqrt(
-    packet.accel.x ** 2 + packet.accel.y ** 2 + packet.accel.z ** 2
-  );
-  
+  // 2. Convert raw LSB values → G-force, then compute magnitude
+  // CRITICAL FIX: firmware sends int16 LSB (±8g range = 4096 LSB/g).
+  // Must divide by LSB_PER_G before comparing against G-force thresholds!
+  const accelXg = packet.accel.x / LSB_PER_G;
+  const accelYg = packet.accel.y / LSB_PER_G;
+  const accelZg = packet.accel.z / LSB_PER_G;
+  const rawAccelMagG = Math.sqrt(accelXg ** 2 + accelYg ** 2 + accelZg ** 2);
+
   const rawGyroMag = Math.sqrt(
     packet.gyro.x ** 2 + packet.gyro.y ** 2 + packet.gyro.z ** 2
   );
 
-  // 3. Simple moving average (5-sample window) on RAW magnitude
-  state.movingAvgWindow.push(rawMag);
-  if (state.movingAvgWindow.length > 5) {
+  // 3. Simple moving average (3-sample window) on G-force magnitude for display
+  state.movingAvgWindow.push(rawAccelMagG);
+  if (state.movingAvgWindow.length > 3) {
     state.movingAvgWindow.shift();
   }
   const processedAccel =
@@ -208,7 +212,7 @@ function processPacket(packet, calibration, state) {
     const isFreefall = state.jumpState === "FREEFALL";
     const isRelease = state.swingState === "RELEASE";
 
-    if (!isFreefall && !isRelease && rawMag > 0.8 && rawMag < 1.2) {
+    if (!isFreefall && !isRelease && rawAccelMagG > 0.8 && rawAccelMagG < 1.2) {
       const accelPitchDeg = Math.atan2(packet.accel.y, Math.sqrt(packet.accel.x ** 2 + packet.accel.z ** 2)) * (180 / Math.PI);
       const accelRollDeg  = Math.atan2(-packet.accel.x, packet.accel.z) * (180 / Math.PI);
 
@@ -226,7 +230,7 @@ function processPacket(packet, calibration, state) {
     calibratedAccel: cAccel,
     calibratedGyro: cGyro,
     processedAccel: Math.round(processedAccel * 10000) / 10000,
-    rawAccelMag: Math.round(rawMag * 10000) / 10000,
+    rawAccelMagG: Math.round(rawAccelMagG * 10000) / 10000, // G-force magnitude used for jump detection
     rawGyroMag: Math.round(rawGyroMag * 10000) / 10000,
     orientation
   };
@@ -383,7 +387,7 @@ io.on("connection", (socket) => {
       }
 
       // ── Signal processing (Task 3.4 & 4) ───────────────────────
-      const { calibratedAccel, calibratedGyro, processedAccel, rawGyroMag, orientation } =
+      const { calibratedAccel, calibratedGyro, processedAccel, rawAccelMagG, rawGyroMag, orientation } =
         processPacket(packet, calibration, state);
 
       // Calculate Stream Hz counts (Task 2)
@@ -445,7 +449,9 @@ io.on("connection", (socket) => {
           });
         }
       } else {
-        const jump = detectJump(processedAccel, packet, calibratedGyro, state);
+        // Use rawAccelMagG (G-force, unsmoothed) for jump detection so the sharp
+        // freefall dip and landing spike aren't averaged away by the display filter.
+        const jump = detectJump(rawAccelMagG, packet, calibratedGyro, state);
         if (jump) {
           console.log(
             `🦘  Jump detected! ${jump.heightCm} cm @ session ${sessionId.slice(0, 8)}…`
