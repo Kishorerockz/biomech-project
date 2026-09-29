@@ -303,7 +303,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                           <option value="Basketball" className="bg-[#1c1b1b]">Basketball</option>
                           <option value="Track & Field" className="bg-[#1c1b1b]">Track & Field / Sprints</option>
                           <option value="High Jump / Long Jump" className="bg-[#1c1b1b]">High Jump / Long Jump</option>
-                          <option value="Cricket / Baseball" className="bg-[#1c1b1b]">Cricket / Baseball</option>
+                          <option value="Plyometrics / Cross-Training" className="bg-[#1c1b1b]">Plyometrics / Cross-Training</option>
                           <option value="Soccer / Football" className="bg-[#1c1b1b]">Soccer / Football</option>
                         </select>
                       </div>

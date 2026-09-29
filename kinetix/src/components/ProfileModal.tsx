@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { AthleteProfile, SessionData } from '../types';
 
 interface ProfileModalProps {
@@ -35,16 +35,17 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
   const handleSaveParameters = () => {
     setSaveSuccess(true);
-    setToastMsg('Physics parameters saved & biomechanics updated!');
-    setTimeout(() => setSaveSuccess(false), 3000);
+    setToastMsg('Physics baseline & biomechanical model updated!');
+    setTimeout(() => setSaveSuccess(false), 2500);
   };
 
   // Derive peak jump across sessions for calculations
-  const maxJumpCm = Math.max(...sessions.map((s) => s.peakJumpCm), 54.5);
+  const maxJumpCm = Math.max(...sessions.map((s) => s.peakJumpCm || 0), 54.5);
 
   // Sayers Peak Power Formula: P(Watts) = 60.7 * JumpHeight(cm) + 45.3 * Mass(kg) - 2055
-  const estimatedPeakPowerW = Math.round(
-    60.7 * maxJumpCm + 45.3 * athleteProfile.weightKg - 2055
+  const estimatedPeakPowerW = Math.max(
+    0,
+    Math.round(60.7 * maxJumpCm + 45.3 * (athleteProfile.weightKg || 70) - 2055)
   );
   const powerToWeightRatio = (
     estimatedPeakPowerW / (athleteProfile.weightKg || 1)
@@ -65,21 +66,21 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `telemetry_lab_full_export.csv`);
+    link.setAttribute('download', `kinetix_telemetry_all_sessions_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
 
-    setToastMsg('All telemetry .CSV exported!');
+    setToastMsg('All session telemetry exported to CSV!');
     setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+    setTimeout(() => setSaveSuccess(false), 2500);
   };
 
   const handleClearCacheClick = () => {
     onClearCache();
     setToastMsg('Session cache cleared successfully.');
     setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+    setTimeout(() => setSaveSuccess(false), 2500);
   };
 
   return (
@@ -88,130 +89,167 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.98 }}
       transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-      className="fixed inset-0 z-50 bg-[#0a0a0a]/95 backdrop-blur-md overflow-y-auto"
+      className="fixed inset-0 z-50 bg-[#0b0d11]/95 backdrop-blur-2xl overflow-y-auto"
     >
       {/* Toast Notification */}
-      {saveSuccess && (
-        <div className="fixed top-20 right-5 z-50 bg-[#c9a050] text-black px-4 py-2 rounded-full font-data-label text-xs shadow-lg flex items-center gap-2 font-bold animate-fade-in uppercase tracking-wider">
-          <span className="material-symbols-outlined text-sm">check_circle</span>
-          {toastMsg}
-        </div>
-      )}
+      <AnimatePresence>
+        {saveSuccess && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="fixed top-20 right-5 z-50 bg-[#00f5d4] text-black px-4 py-2.5 rounded-full font-mono text-xs shadow-2xl flex items-center gap-2 font-bold uppercase tracking-wider"
+          >
+            <span className="material-symbols-outlined text-sm font-bold">check_circle</span>
+            {toastMsg}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Top Header */}
-      <header className="fixed top-0 w-full z-50 bg-[#0a0a0a]/90 backdrop-blur-md border-b border-white/10 flex justify-between items-center px-5 md:px-10 h-16">
+      <header className="fixed top-0 w-full z-50 bg-[#0b0d11]/90 backdrop-blur-xl border-b border-white/[0.08] flex justify-between items-center px-5 md:px-10 h-16">
         <button
           onClick={onClose}
-          className="text-white/60 hover:text-[#c9a050] transition-colors p-2 rounded-full flex items-center justify-center active:scale-95 cursor-pointer gap-1"
+          className="text-white/60 hover:text-[#00f5d4] transition-colors p-2 rounded-xl bg-white/[0.03] border border-white/10 flex items-center justify-center active:scale-95 cursor-pointer gap-1.5"
           aria-label="Back to Dashboard"
         >
-          <span className="material-symbols-outlined">arrow_back</span>
-          <span className="font-data-label text-xs uppercase hidden sm:inline">Back to Telemetry</span>
+          <span className="material-symbols-outlined text-lg">arrow_back</span>
+          <span className="font-mono text-xs uppercase hidden sm:inline">Telemetry</span>
         </button>
 
-        <div className="font-display-metrics text-xs sm:text-base md:text-xl tracking-wide sm:tracking-widest text-[#c9a050] font-bold uppercase text-center truncate px-2">
-          ATHLETE PROFILE &amp; BIOMECHANICS
+        <div className="font-mono text-xs sm:text-sm font-bold tracking-wider text-white uppercase text-center flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-[#00f5d4] shadow-[0_0_8px_#00f5d4]" />
+          <span>Athlete Profile &amp; Biomechanics</span>
         </div>
 
         <button
           onClick={onClose}
-          className="text-white/60 hover:text-[#c9a050] transition-colors p-2 rounded-full cursor-pointer flex items-center gap-1"
+          className="text-white/60 hover:text-white transition-colors p-2 rounded-xl bg-white/[0.03] border border-white/10 cursor-pointer flex items-center gap-1 active:scale-95"
         >
-          <span className="text-[10px] font-data-label text-white/40 hidden sm:inline border border-white/10 px-1.5 py-0.5 rounded">ESC</span>
-          <span className="material-symbols-outlined">close</span>
+          <span className="text-[10px] font-mono text-white/40 hidden sm:inline px-1 py-0.5">ESC</span>
+          <span className="material-symbols-outlined text-lg">close</span>
         </button>
       </header>
 
       {/* Main Content */}
-      <main className="mt-20 px-5 md:px-10 py-6 max-w-4xl mx-auto w-full space-y-8 pb-32">
-        {/* Profile Header Section */}
-        <section className="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-md flex flex-col items-center md:flex-row md:items-start gap-6">
+      <main className="mt-20 px-4 sm:px-6 md:px-10 py-6 max-w-4xl mx-auto w-full space-y-6 pb-28">
+        {/* Profile Card Section */}
+        <section className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] p-6 backdrop-blur-xl flex flex-col md:flex-row items-center md:items-start gap-6">
           <div className="relative group">
             <img
               src={athleteProfile.avatarUrl}
               alt={athleteProfile.name}
-              className="w-28 h-28 md:w-32 md:h-32 rounded-full object-cover border-2 border-[#c9a050] shadow-xl"
+              className="w-24 h-24 md:w-28 md:h-28 rounded-2xl object-cover border-2 border-[#00f5d4]/40 shadow-[0_0_25px_rgba(0,245,212,0.15)]"
             />
+            <div className="absolute -bottom-2 -right-2 w-7 h-7 rounded-lg bg-[#00f5d4] text-black flex items-center justify-center font-bold text-xs shadow-md">
+              <span className="material-symbols-outlined text-sm">verified</span>
+            </div>
           </div>
 
-          <div className="text-center md:text-left flex-1 space-y-3">
+          <div className="text-center md:text-left flex-1 space-y-4 w-full">
             <div>
-              <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
-                <h1 className="font-headline-lg-mobile md:font-headline-lg text-2xl md:text-3xl font-bold text-white tracking-wide">
+              <div className="flex flex-wrap items-center justify-center md:justify-start gap-2.5">
+                <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">
                   {athleteProfile.name}
                 </h1>
-                <span className="font-data-label text-[10px] bg-[#c9a050]/20 text-[#c9a050] border border-[#c9a050]/40 px-2 py-0.5 rounded-full uppercase font-bold">
-                  VERIFIED HARDWARE NODE
+                <span className="font-mono text-[10px] bg-[#00f5d4]/10 text-[#00f5d4] border border-[#00f5d4]/30 px-2.5 py-0.5 rounded-full uppercase font-bold tracking-wider">
+                  Hardware Synced
                 </span>
               </div>
-              <p className="font-body-lg text-base text-white/60 mt-0.5">{athleteProfile.role}</p>
+              <p className="font-mono text-xs text-white/50 mt-1">{athleteProfile.role}</p>
             </div>
 
-            <div className="pt-3 border-t border-white/10 inline-block md:block w-full max-w-xs">
-              <label
-                className="font-data-label text-xs text-white/50 block mb-2 uppercase tracking-wider"
-                htmlFor="primary-sport"
-              >
-                PRIMARY SPORT
-              </label>
-              <div className="relative">
-                <select
-                  id="primary-sport"
-                  value={athleteProfile.primarySport}
-                  onChange={(e) =>
-                    setAthleteProfile((prev) => ({
-                      ...prev,
-                      primarySport: e.target.value,
-                      role: `${e.target.value} Athlete`,
-                    }))
-                  }
-                  className="w-full bg-white/5 border border-white/10 rounded-full py-2.5 px-4 font-data-value text-sm text-white appearance-none focus:outline-none focus:border-[#c9a050] transition-all cursor-pointer"
+            <div className="pt-3 border-t border-white/[0.08] grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+              <div>
+                <label
+                  className="font-mono text-[11px] text-white/50 block mb-1.5 uppercase tracking-wider font-semibold"
+                  htmlFor="primary-sport"
                 >
-                  <option value="Volleyball" className="bg-[#0a0a0a]">Volleyball</option>
-                  <option value="Basketball" className="bg-[#0a0a0a]">Basketball</option>
-                  <option value="Track & Field" className="bg-[#0a0a0a]">Track &amp; Field</option>
-                  <option value="Cricket" className="bg-[#0a0a0a]">Cricket</option>
-                  <option value="Sprints" className="bg-[#0a0a0a]">Sprints</option>
-                </select>
-                <span className="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/50">
-                  expand_more
-                </span>
+                  Primary Discipline
+                </label>
+                <div className="relative">
+                  <select
+                    id="primary-sport"
+                    value={athleteProfile.primarySport}
+                    onChange={(e) =>
+                      setAthleteProfile((prev) => ({
+                        ...prev,
+                        primarySport: e.target.value,
+                        role: `${e.target.value} Athlete`,
+                      }))
+                    }
+                    className="w-full bg-[#0b0d11] border border-white/10 rounded-xl py-2.5 px-4 font-mono text-xs text-white appearance-none focus:outline-none focus:border-[#00f5d4] transition-all cursor-pointer"
+                  >
+                    <option value="Volleyball" className="bg-[#0b0d11]">Volleyball</option>
+                    <option value="Basketball" className="bg-[#0b0d11]">Basketball</option>
+                    <option value="Track & Field" className="bg-[#0b0d11]">Track &amp; Field</option>
+                    <option value="Plyometrics" className="bg-[#0b0d11]">Plyometrics</option>
+                  </select>
+                  <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-white/40 text-base">
+                    expand_more
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label
+                  className="font-mono text-[11px] text-white/50 block mb-1.5 uppercase tracking-wider font-semibold"
+                  htmlFor="wear-location"
+                >
+                  Sensor Wear Placement
+                </label>
+                <div className="relative">
+                  <select
+                    id="wear-location"
+                    value={athleteProfile.wearLocation || 'waist'}
+                    onChange={(e) =>
+                      setAthleteProfile((prev) => ({
+                        ...prev,
+                        wearLocation: e.target.value as any,
+                      }))
+                    }
+                    className="w-full bg-[#0b0d11] border border-white/10 rounded-xl py-2.5 px-4 font-mono text-xs text-white appearance-none focus:outline-none focus:border-[#00f5d4] transition-all cursor-pointer"
+                  >
+                    <option value="waist" className="bg-[#0b0d11]">Waist / Lower Back (Recommended - Center of Mass)</option>
+                    <option value="ankle" className="bg-[#0b0d11]">Ankle / Foot (Impact &amp; Contact Mode)</option>
+                    <option value="arm" className="bg-[#0b0d11]">Arm / Forearm (Upper Limb Dynamics)</option>
+                  </select>
+                  <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-white/40 text-base">
+                    expand_more
+                  </span>
+                </div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* PRIORITY 1: BIOMECHANICAL PHYSICS PARAMETERS ENGINE */}
-        <section className="space-y-4 bg-gradient-to-b from-[#c9a050]/10 via-white/5 to-white/5 border border-[#c9a050]/40 rounded-3xl p-6 backdrop-blur-md shadow-2xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
-            <span className="material-symbols-outlined text-8xl text-[#c9a050]">sports_score</span>
-          </div>
-
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="material-symbols-outlined text-[#c9a050] text-xl shrink-0">biometrics</span>
-                <h2 className="font-headline-md text-base sm:text-lg md:text-xl text-[#c9a050] font-bold uppercase tracking-wide leading-tight">
-                  BIOMECHANICAL INPUT ENGINE
+        {/* BIOMECHANICAL PHYSICS PARAMETERS ENGINE */}
+        <section className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] p-6 backdrop-blur-xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.08] pb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[#00f5d4] text-lg">biometrics</span>
+                <h2 className="font-mono text-sm font-bold text-white uppercase tracking-wider">
+                  Biomechanical Input Engine
                 </h2>
               </div>
-              <p className="font-data-label text-xs text-white/60 mt-1">
-                Core physics baseline parameters required for Sayers impulse &amp; vertical reach calculations
+              <p className="text-xs font-mono text-white/40 mt-0.5">
+                Physical baselines required for Sayers impulse &amp; vertical reach calculations
               </p>
             </div>
-            <span className="font-data-label text-[10px] bg-[#c9a050] text-black px-2.5 py-1 rounded-full font-bold uppercase tracking-widest self-start sm:self-center shrink-0">
-              Core Calibration Input
+            <span className="font-mono text-[10px] bg-[#00f5d4]/10 text-[#00f5d4] border border-[#00f5d4]/30 px-3 py-1 rounded-full font-bold uppercase tracking-wider self-start sm:self-auto">
+              Calibration Baseline
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             {/* Height Input */}
-            <div className="bg-black/40 border border-white/15 rounded-2xl p-4 flex flex-col justify-between gap-3 hover:border-[#c9a050]/50 transition-colors">
+            <div className="bg-[#0b0d11]/80 border border-white/[0.08] rounded-2xl p-4 flex flex-col justify-between gap-2 hover:border-[#00f5d4]/40 transition-colors">
               <div className="flex justify-between items-center">
-                <label className="font-data-label text-xs text-white/60 uppercase tracking-wider font-bold" htmlFor="height-input">
-                  HEIGHT (CM)
+                <label className="font-mono text-[11px] text-white/50 uppercase tracking-wider font-semibold" htmlFor="height-input">
+                  Height
                 </label>
-                <span className="material-symbols-outlined text-xs text-[#c9a050]">height</span>
+                <span className="material-symbols-outlined text-sm text-[#00f5d4]">height</span>
               </div>
               <div className="relative">
                 <input
@@ -225,21 +263,21 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       heightCm: Number(e.target.value),
                     }))
                   }
-                  className="w-full bg-white/5 border border-white/20 rounded-xl py-2.5 px-4 font-display-metrics text-2xl text-white focus:outline-none focus:border-[#c9a050] transition-all text-right pr-12 font-bold"
+                  className="w-full bg-white/[0.03] border border-white/10 rounded-xl py-2 px-3 font-mono text-xl text-white focus:outline-none focus:border-[#00f5d4] transition-all font-bold pr-10"
                 />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 font-data-label text-xs text-[#c9a050] font-bold">
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-xs text-[#00f5d4] font-bold">
                   cm
                 </span>
               </div>
             </div>
 
             {/* Weight Input */}
-            <div className="bg-black/40 border border-white/15 rounded-2xl p-4 flex flex-col justify-between gap-3 hover:border-[#c9a050]/50 transition-colors">
+            <div className="bg-[#0b0d11]/80 border border-white/[0.08] rounded-2xl p-4 flex flex-col justify-between gap-2 hover:border-[#00f5d4]/40 transition-colors">
               <div className="flex justify-between items-center">
-                <label className="font-data-label text-xs text-white/60 uppercase tracking-wider font-bold" htmlFor="weight-input">
-                  BODY MASS (KG)
+                <label className="font-mono text-[11px] text-white/50 uppercase tracking-wider font-semibold" htmlFor="weight-input">
+                  Body Mass
                 </label>
-                <span className="material-symbols-outlined text-xs text-[#c9a050]">monitor_weight</span>
+                <span className="material-symbols-outlined text-sm text-amber-400">monitor_weight</span>
               </div>
               <div className="relative">
                 <input
@@ -253,21 +291,21 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       weightKg: Number(e.target.value),
                     }))
                   }
-                  className="w-full bg-white/5 border border-white/20 rounded-xl py-2.5 px-4 font-display-metrics text-2xl text-white focus:outline-none focus:border-[#c9a050] transition-all text-right pr-12 font-bold"
+                  className="w-full bg-white/[0.03] border border-white/10 rounded-xl py-2 px-3 font-mono text-xl text-white focus:outline-none focus:border-[#00f5d4] transition-all font-bold pr-10"
                 />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 font-data-label text-xs text-[#c9a050] font-bold">
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-xs text-amber-400 font-bold">
                   kg
                 </span>
               </div>
             </div>
 
             {/* Standing Reach Input */}
-            <div className="bg-black/40 border border-white/15 rounded-2xl p-4 flex flex-col justify-between gap-3 hover:border-[#c9a050]/50 transition-colors">
+            <div className="bg-[#0b0d11]/80 border border-white/[0.08] rounded-2xl p-4 flex flex-col justify-between gap-2 hover:border-[#00f5d4]/40 transition-colors">
               <div className="flex justify-between items-center">
-                <label className="font-data-label text-xs text-white/60 uppercase tracking-wider font-bold" htmlFor="reach-input">
-                  STANDING REACH (CM)
+                <label className="font-mono text-[11px] text-white/50 uppercase tracking-wider font-semibold" htmlFor="reach-input">
+                  Standing Reach
                 </label>
-                <span className="material-symbols-outlined text-xs text-[#c9a050]">straighten</span>
+                <span className="material-symbols-outlined text-sm text-purple-400">straighten</span>
               </div>
               <div className="relative">
                 <input
@@ -281,9 +319,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       standingReachCm: Number(e.target.value),
                     }))
                   }
-                  className="w-full bg-white/5 border border-white/20 rounded-xl py-2.5 px-4 font-display-metrics text-2xl text-white focus:outline-none focus:border-[#c9a050] transition-all text-right pr-12 font-bold"
+                  className="w-full bg-white/[0.03] border border-white/10 rounded-xl py-2 px-3 font-mono text-xl text-white focus:outline-none focus:border-[#00f5d4] transition-all font-bold pr-10"
                 />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 font-data-label text-xs text-[#c9a050] font-bold">
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-xs text-purple-400 font-bold">
                   cm
                 </span>
               </div>
@@ -291,183 +329,173 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           </div>
 
           {/* Live Calculated Biomechanical Indicators Bar */}
-          <div className="mt-4 pt-4 border-t border-white/10 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="bg-white/5 p-3 rounded-xl border border-white/10 flex flex-col justify-between">
-              <span className="font-data-label text-[10px] text-white/50 uppercase tracking-wider">
-                Est. Spike Reach
+          <div className="pt-3 border-t border-white/[0.08] grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-white/[0.02] p-3.5 rounded-2xl border border-white/[0.06] flex flex-col justify-between">
+              <span className="font-mono text-[10px] text-white/40 uppercase tracking-wider">
+                Max Spike / Block Reach
               </span>
-              <div className="font-display-metrics text-xl text-[#c9a050] mt-1 font-bold">
+              <div className="font-mono text-lg text-[#00f5d4] mt-1 font-bold">
                 {estimatedMaxReachCm.toFixed(1)} cm
               </div>
-              <span className="font-data-label text-[9px] text-white/40 mt-0.5">Reach + Peak Jump ({maxJumpCm}cm)</span>
+              <span className="font-mono text-[9px] text-white/30 mt-0.5">Reach + Peak Jump ({maxJumpCm}cm)</span>
             </div>
 
-            <div className="bg-white/5 p-3 rounded-xl border border-white/10 flex flex-col justify-between">
-              <span className="font-data-label text-[10px] text-white/50 uppercase tracking-wider">
+            <div className="bg-white/[0.02] p-3.5 rounded-2xl border border-white/[0.06] flex flex-col justify-between">
+              <span className="font-mono text-[10px] text-white/40 uppercase tracking-wider">
                 Sayers Peak Power Output
               </span>
-              <div className="font-display-metrics text-xl text-[#c9a050] mt-1 font-bold">
-                {estimatedPeakPowerW} Watts
+              <div className="font-mono text-lg text-amber-300 mt-1 font-bold">
+                {estimatedPeakPowerW} W
               </div>
-              <span className="font-data-label text-[9px] text-white/40 mt-0.5">Peak mechanical explosive force</span>
+              <span className="font-mono text-[9px] text-white/30 mt-0.5">Instantaneous explosive mechanical wattage</span>
             </div>
 
-            <div className="bg-white/5 p-3 rounded-xl border border-white/10 flex flex-col justify-between">
-              <span className="font-data-label text-[10px] text-white/50 uppercase tracking-wider">
+            <div className="bg-white/[0.02] p-3.5 rounded-2xl border border-white/[0.06] flex flex-col justify-between">
+              <span className="font-mono text-[10px] text-white/40 uppercase tracking-wider">
                 Power-to-Weight Ratio
               </span>
-              <div className="font-display-metrics text-xl text-emerald-400 mt-1 font-bold">
+              <div className="font-mono text-lg text-emerald-400 mt-1 font-bold">
                 {powerToWeightRatio} W/kg
               </div>
-              <span className="font-data-label text-[9px] text-white/40 mt-0.5">Explosiveness index</span>
+              <span className="font-mono text-[9px] text-white/30 mt-0.5">Explosiveness index per kg mass</span>
             </div>
           </div>
 
-          <div className="flex justify-end pt-2">
+          <div className="flex justify-end pt-1">
             <button
               onClick={handleSaveParameters}
-              className="bg-[#c9a050] text-black rounded-full px-6 py-2.5 font-data-value text-xs font-bold hover:bg-[#d9b060] transition-all cursor-pointer uppercase tracking-widest shadow-lg active:scale-95 flex items-center gap-2"
+              className="bg-[#00f5d4] text-black rounded-xl px-5 py-2.5 font-mono text-xs font-bold hover:bg-[#00f5d4]/90 transition-all cursor-pointer uppercase tracking-wider shadow-[0_0_15px_rgba(0,245,212,0.2)] active:scale-95 flex items-center gap-1.5"
             >
-              <span className="material-symbols-outlined text-sm">save</span>
-              UPDATE BIOMECHANICS BASELINE
+              <span className="material-symbols-outlined text-sm font-bold">save</span>
+              Save Biomechanics Baseline
             </button>
           </div>
         </section>
 
-        {/* System Preferences Section */}
-        <section className="space-y-4">
-          <h2 className="font-headline-md text-lg md:text-xl text-[#c9a050] font-bold border-b border-white/10 pb-2 uppercase tracking-wider flex items-center gap-2">
-            <span className="material-symbols-outlined text-base">tune</span>
-            SYSTEM PREFERENCES
-          </h2>
+        {/* System Preferences Section (Cleaned up: No unwanted light mode toggle) */}
+        <section className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] p-6 backdrop-blur-xl space-y-4">
+          <div className="border-b border-white/[0.08] pb-3">
+            <h2 className="font-mono text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+              <span className="material-symbols-outlined text-base text-[#00f5d4]">tune</span>
+              System Preferences
+            </h2>
+            <p className="text-xs font-mono text-white/40 mt-0.5">
+              Unit formatting and measurement system configuration
+            </p>
+          </div>
 
-          <div className="bg-white/5 border border-white/10 rounded-2xl divide-y divide-white/10 backdrop-blur-md">
-            {/* Units Toggle */}
-            <div className="flex justify-between items-center p-4">
-              <div>
-                <div className="font-body-lg text-base text-white font-medium">Unit Measurement System</div>
-                <div className="font-body-sm text-xs text-white/50">Switch between Metric (cm/kg) and Imperial (in/lbs)</div>
-              </div>
-
-              <div className="flex items-center gap-3 font-data-label text-xs">
-                <span
-                  className={athleteProfile.units === 'metric' ? 'text-[#c9a050] font-bold' : 'text-white/50'}
-                >
-                  Metric
-                </span>
-
-                <button
-                  onClick={() =>
-                    setAthleteProfile((prev) => ({
-                      ...prev,
-                      units: prev.units === 'metric' ? 'imperial' : 'metric',
-                    }))
-                  }
-                  className="w-12 h-6 rounded-full bg-white/10 border border-white/20 p-0.5 relative transition-colors cursor-pointer"
-                >
-                  <div
-                    className={`w-5 h-5 rounded-full bg-[#c9a050] transition-transform ${
-                      athleteProfile.units === 'imperial' ? 'translate-x-6' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-
-                <span
-                  className={athleteProfile.units === 'imperial' ? 'text-[#c9a050] font-bold' : 'text-white/50'}
-                >
-                  Imperial
-                </span>
+          <div className="flex justify-between items-center py-2">
+            <div>
+              <div className="text-sm text-white font-medium">Unit Measurement System</div>
+              <div className="font-mono text-xs text-white/40 mt-0.5">
+                Switch between Metric (cm/kg) and Imperial (in/lbs)
               </div>
             </div>
 
-            {/* Dark Mode Toggle */}
-            <div className="flex justify-between items-center p-4">
-              <div>
-                <div className="font-body-lg text-base text-white font-medium">High-Contrast Canvas</div>
-                <div className="font-body-sm text-xs text-white/50">
-                  Obsidian low-glare HUD color profile
-                </div>
-              </div>
-
+            <div className="flex items-center gap-2.5 font-mono text-xs">
               <button
                 onClick={() =>
                   setAthleteProfile((prev) => ({
                     ...prev,
-                    darkMode: !prev.darkMode,
+                    units: 'metric',
                   }))
                 }
-                className="w-12 h-6 rounded-full bg-white/10 border border-white/20 p-0.5 relative transition-colors cursor-pointer"
+                className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                  athleteProfile.units === 'metric'
+                    ? 'bg-[#00f5d4]/15 text-[#00f5d4] border-[#00f5d4]/40 shadow-[0_0_10px_rgba(0,245,212,0.15)]'
+                    : 'bg-white/[0.02] text-white/40 border-white/[0.08] hover:text-white'
+                }`}
               >
-                <div
-                  className={`w-5 h-5 rounded-full bg-[#c9a050] transition-transform ${
-                    athleteProfile.darkMode ? 'translate-x-6' : 'translate-x-0'
-                  }`}
-                />
+                Metric (cm)
+              </button>
+              <button
+                onClick={() =>
+                  setAthleteProfile((prev) => ({
+                    ...prev,
+                    units: 'imperial',
+                  }))
+                }
+                className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                  athleteProfile.units === 'imperial'
+                    ? 'bg-amber-400/15 text-amber-300 border-amber-400/40 shadow-[0_0_10px_rgba(251,191,36,0.15)]'
+                    : 'bg-white/[0.02] text-white/40 border-white/[0.08] hover:text-white'
+                }`}
+              >
+                Imperial (in)
               </button>
             </div>
           </div>
         </section>
 
         {/* Account & Data Management Section */}
-        <section className="space-y-4">
-          <h2 className="font-headline-md text-lg md:text-xl text-[#c9a050] font-bold border-b border-white/10 pb-2 uppercase tracking-wider flex items-center gap-2">
-            <span className="material-symbols-outlined text-base">folder_data</span>
-            DATA &amp; ACCOUNT MANAGEMENT
-          </h2>
+        <section className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] p-6 backdrop-blur-xl space-y-4">
+          <div className="border-b border-white/[0.08] pb-3">
+            <h2 className="font-mono text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+              <span className="material-symbols-outlined text-base text-[#00f5d4]">folder_data</span>
+              Data &amp; Storage Management
+            </h2>
+            <p className="text-xs font-mono text-white/40 mt-0.5">
+              Export raw session telemetry or clear offline persistent memory
+            </p>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <button
               onClick={handleExportAllCSV}
-              className="bg-white/5 border border-[#c9a050]/50 rounded-2xl p-4 flex items-center justify-between hover:bg-white/10 transition-colors group cursor-pointer backdrop-blur-md"
+              className="bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.08] hover:border-[#00f5d4]/40 rounded-2xl p-4 flex items-center justify-between transition-all group cursor-pointer"
             >
               <div className="flex flex-col text-left">
-                <span className="font-body-lg text-base text-[#c9a050] font-bold uppercase tracking-wider">
-                  Export Full Telemetry
+                <span className="text-sm font-semibold text-white group-hover:text-[#00f5d4] transition-colors">
+                  Export Complete Telemetry (.CSV)
                 </span>
-                <span className="font-body-sm text-xs text-white/50">
-                  Download structured .CSV logs for all sessions
+                <span className="font-mono text-xs text-white/40 mt-0.5">
+                  Download structured logs for all sessions
                 </span>
               </div>
-              <span className="material-symbols-outlined text-[#c9a050] group-hover:translate-x-1 transition-transform">
-                download
-              </span>
+              <div className="w-9 h-9 rounded-xl bg-white/[0.04] flex items-center justify-center text-[#00f5d4] group-hover:bg-[#00f5d4]/20 transition-colors">
+                <span className="material-symbols-outlined text-base group-hover:translate-y-0.5 transition-transform">
+                  download
+                </span>
+              </div>
             </button>
 
             <button
               onClick={handleClearCacheClick}
-              className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center justify-between hover:bg-white/10 transition-colors group cursor-pointer backdrop-blur-md"
+              className="bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.08] hover:border-amber-400/40 rounded-2xl p-4 flex items-center justify-between transition-all group cursor-pointer"
             >
               <div className="flex flex-col text-left">
-                <span className="font-body-lg text-base text-white font-medium uppercase tracking-wider">
+                <span className="text-sm font-semibold text-white group-hover:text-amber-300 transition-colors">
                   Purge Local Storage Cache
                 </span>
-                <span className="font-body-sm text-xs text-white/50">
+                <span className="font-mono text-xs text-white/40 mt-0.5">
                   Clear cached session logs &amp; reset state
                 </span>
               </div>
-              <span className="material-symbols-outlined text-white/50 group-hover:rotate-180 transition-transform duration-500">
-                cleaning_services
-              </span>
+              <div className="w-9 h-9 rounded-xl bg-white/[0.04] flex items-center justify-center text-amber-400 group-hover:bg-amber-400/20 transition-colors">
+                <span className="material-symbols-outlined text-base group-hover:rotate-180 transition-transform duration-500">
+                  cleaning_services
+                </span>
+              </div>
             </button>
           </div>
 
-          <div className="pt-6 flex flex-col sm:flex-row justify-center items-center gap-4 border-t border-white/10">
+          <div className="pt-4 flex flex-col sm:flex-row justify-between items-center gap-3 border-t border-white/[0.08]">
             <button
               onClick={onClose}
-              className="bg-[#c9a050] text-black font-data-label font-bold text-xs uppercase tracking-[0.2em] px-8 py-3 rounded-full hover:bg-[#d9b060] transition-all cursor-pointer shadow-lg flex items-center gap-2 active:scale-95"
+              className="w-full sm:w-auto bg-[#00f5d4]/10 hover:bg-[#00f5d4]/20 border border-[#00f5d4]/30 text-[#00f5d4] font-mono font-bold text-xs uppercase tracking-wider px-6 py-2.5 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
             >
               <span className="material-symbols-outlined text-base">arrow_back</span>
-              RETURN TO TELEMETRY DASHBOARD
+              Return to Telemetry
             </button>
             <button
               onClick={() => {
                 onClose();
                 if (onLogout) onLogout();
               }}
-              className="border border-red-500/50 text-red-300 rounded-full px-6 py-3 font-data-value text-xs hover:bg-red-500 hover:text-black transition-colors flex items-center gap-2 font-bold cursor-pointer uppercase tracking-widest opacity-80 hover:opacity-100"
+              className="w-full sm:w-auto border border-rose-500/30 hover:border-rose-500 text-rose-300 hover:bg-rose-500/10 rounded-xl px-5 py-2.5 font-mono text-xs transition-colors flex items-center justify-center gap-2 font-bold cursor-pointer uppercase tracking-wider"
             >
               <span className="material-symbols-outlined text-base">logout</span>
-              DISCONNECT &amp; LOGOUT
+              Disconnect &amp; Logout
             </button>
           </div>
         </section>

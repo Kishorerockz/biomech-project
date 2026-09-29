@@ -1,4 +1,5 @@
 export type TabType = 'live' | 'analysis' | 'history' | 'calibration' | 'profile';
+export type JumpType = 'CMJ' | 'SJ' | 'DJ';
 
 export interface JumpAttempt {
   id: number;
@@ -6,6 +7,22 @@ export interface JumpAttempt {
   jumpCm: number;
   isPeak?: boolean;
   isFatigue?: boolean;
+  jumpType?: JumpType;
+  eur?: number;
+}
+
+export interface JumpRecord {
+  id: number;
+  timestamp: string;
+  hang_time: number;
+  landing_impact: number;
+  takeoff_expl: number;
+  ground_contact_ms?: number;
+  rsi?: number;
+  dip_depth_cm?: number;
+  rfd?: number;
+  jump_type?: JumpType;
+  eur?: number;
 }
 
 export interface SessionData {
@@ -25,8 +42,17 @@ export interface SessionData {
   jumpHeights?: number[];
 }
 
+export interface SensorOffsets {
+  xOffset: number;
+  yOffset: number;
+  zOffset: number;
+}
+
+export type ConnectionMode = 'disconnected' | 'wifi' | 'ble';
+
 export interface SensorState {
   connected: boolean;
+  connectionMode?: ConnectionMode;
   reconnecting?: boolean;
   gyro?: { x: number; y: number; z: number };
   accel?: { x: number; y: number; z: number };
@@ -43,10 +69,10 @@ export interface SensorState {
   hangTimeMs?: number;
   landingImpactG?: number;
   takeoffAccelG?: number;
+  groundContactTimeMs?: number;
+  rsi?: number;
+  hardwareTimestampUs?: number;
   twistDeg?: number;
-  swingCount?: number;
-  lastSwingVelocity?: number;
-  lastSwingDurationMs?: number;
   orientation?: { x: number; y: number; z: number; w: number };
   streamHz?: number;
 }
@@ -61,6 +87,8 @@ export interface HistoryResponse {
   };
 }
 
+export type WearLocation = 'waist' | 'ankle' | 'arm';
+
 export interface AthleteProfile {
   name: string;
   email?: string;
@@ -70,6 +98,7 @@ export interface AthleteProfile {
   heightCm: number;
   standingReachCm: number;
   jumpThresholdG: number;
+  wearLocation?: WearLocation;
   units: 'metric' | 'imperial';
   darkMode: boolean;
   avatarUrl: string;

@@ -1,16 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { SensorState, AthleteProfile, SessionData } from '../types';
-import { formatMetricHeight } from '../data';
 import { audioEngine } from '../utils/audio';
 import { JumpAvatar } from './JumpAvatar';
+import { useJumpDetection } from '../hooks/useJumpDetection';
+import { bleHardware } from '../utils/bluetooth';
 
 interface LiveTabProps {
   sensorState: SensorState;
   setSensorState: React.Dispatch<React.SetStateAction<SensorState>>;
   athleteProfile: AthleteProfile;
-  currentSession: SessionData | undefined; // Task 6: Read sport dynamically from active session
-  onTriggerSessionStart: () => void;
+  currentSession: SessionData | undefined;
+  isSessionActive: boolean;
+  sessionElapsedSec: number;
+  onToggleSession: () => void;
   onRecordJump: (jumpCm: number) => void;
+  onPairBLE?: () => void;
+  onOpenConnectionSettings?: () => void;
+  serverHost?: string;
+  onTare?: () => void;
 }
 
 export const LiveTab: React.FC<LiveTabProps> = ({
@@ -18,434 +25,549 @@ export const LiveTab: React.FC<LiveTabProps> = ({
   setSensorState,
   athleteProfile,
   currentSession,
-  onTriggerSessionStart,
+  isSessionActive,
+  sessionElapsedSec,
+  onToggleSession,
   onRecordJump,
+  onPairBLE,
+  onOpenConnectionSettings,
+  onTare,
 }) => {
-  const [isSimulatingStream, setIsSimulatingStream] = useState(true);
   const [jumpAnimation, setJumpAnimation] = useState(false);
+  const [activeTelemetryView, setActiveTelemetryView] = useState<'graph' | '3d'>('graph');
+  const [unit, setUnit] = useState<'cm' | 'in'>(athleteProfile.units === 'imperial' ? 'in' : 'cm');
+  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [tareSuccess, setTareSuccess] = useState(false);
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dataPointsRef = useRef<number[]>([]);
   const latestAccelRef = useRef<number>(sensorState.procAccelG || 1.0);
-  const [isConnected, setIsConnected] = useState(false);
+  const maxJumpCmRef = useRef<number>(0);
 
-  // Compute active sport (backend truth prioritized over profile setting)
-  const activeSport = (currentSession ? currentSession.sport : athleteProfile.primarySport).toLowerCase();
+  // Jump Detection Engine
+  const jumpMetrics = useJumpDetection(
+    sensorState.procAccelG || 1.0,
+    isSessionActive,
+    (metrics) => {
+      // ── Pure Flight-Time Kinematics (Gold Standard) ──────────────
+      // h = g · t² / 8  →  122.625 · t²  (t in seconds)
+      // Same formula used by force plates, Optojump, and commercial jump mats.
+      // Using only flight duration avoids noisy velocity integration drift.
+      const flightTimeSec = metrics.hangTimeMs / 1000;
+      const flightHeightCm = 122.625 * flightTimeSec * flightTimeSec;
 
+      // Secondary kinematic check: Takeoff Velocity (Impulse-Momentum Method: h = v^2 / 2g)
+      const velHeightCm = metrics.trueTakeoffVelocity && metrics.trueTakeoffVelocity > 0.6
+        ? (metrics.trueTakeoffVelocity * metrics.trueTakeoffVelocity / 19.62) * 100
+        : 0;
+
+      // Use the higher confidence metric: if flight was truncated (e.g. knee tucking or late freefall),
+      // the takeoff impulse velocity guarantees athletic jump height accuracy
+      let bestHeight = flightHeightCm;
+      if (velHeightCm > 8.0 && velHeightCm > flightHeightCm * 1.3) {
+        bestHeight = (flightHeightCm * 0.35) + (velHeightCm * 0.65);
+      } else if (velHeightCm > flightHeightCm && flightHeightCm < 10.0) {
+        bestHeight = Math.max(flightHeightCm, velHeightCm);
+      }
+
+      const calculatedHeightCm = parseFloat(Math.min(120.0, bestHeight).toFixed(1));
+
+      const isPeak = calculatedHeightCm > maxJumpCmRef.current;
+      if (isPeak) maxJumpCmRef.current = calculatedHeightCm;
+
+      const isFatigued = maxJumpCmRef.current > 15.0 && calculatedHeightCm < (maxJumpCmRef.current * 0.85);
+
+      setSensorState((prev) => ({
+        ...prev,
+        lastJumpCm: calculatedHeightCm,
+        maxJumpCm: isPeak ? calculatedHeightCm : prev.maxJumpCm,
+        totalJumps: metrics.totalJumps,
+        hangTimeMs: metrics.hangTimeMs,
+        landingImpactG: metrics.landingImpactG,
+        takeoffAccelG: metrics.takeoffAccelG,
+        groundContactTimeMs: metrics.groundContactTimeMs,
+        rsi: metrics.rsi,
+        isNewPeak: isPeak,
+      }));
+
+      // Audio & Haptic Feedback
+      if (audioEnabled) {
+        if (metrics.landingImpactG && metrics.landingImpactG >= 4.5) {
+          audioEngine.playShockAlert();
+          audioEngine.speakVoiceAnnouncement(`Caution: Heavy landing. ${metrics.landingImpactG} Gs.`);
+        } else if (isFatigued) {
+          audioEngine.playFatigueWarning();
+          audioEngine.speakVoiceAnnouncement(`Fatigue drop off. ${calculatedHeightCm} centimeters.`);
+        } else {
+          audioEngine.playJumpChime(isPeak);
+          audioEngine.triggerHaptic(isPeak ? [60, 40, 80] : 40);
+          if (isPeak) {
+            audioEngine.speakVoiceAnnouncement(`New peak! ${calculatedHeightCm} centimeters.`);
+          } else {
+            audioEngine.speakVoiceAnnouncement(`${calculatedHeightCm} centimeters.`);
+          }
+        }
+      }
+
+      onRecordJump(calculatedHeightCm);
+    },
+    sensorState.hardwareTimestampUs,
+    athleteProfile.wearLocation || 'waist',
+    athleteProfile.jumpThresholdG
+  );
+
+  // Sync state values
   useEffect(() => {
-    latestAccelRef.current = sensorState.procAccelG;
-    setIsConnected(sensorState.connected);
-  }, [sensorState]);
+    latestAccelRef.current = sensorState.procAccelG || 1.0;
+  }, [sensorState.procAccelG]);
 
-  // Initialize buffer for accelerometer graph
+  // Waveform canvas initialization & rendering
   useEffect(() => {
     const pointsCount = 120;
-    const initial = Array(pointsCount).fill(50);
+    const initial = Array(pointsCount).fill(94);
     dataPointsRef.current = initial;
   }, []);
 
-  // Animate accelerometer waveform
   useEffect(() => {
-    if (!isSimulatingStream) return;
-
     let animId: number;
-
     const render = () => {
       const canvas = canvasRef.current;
-      if (canvas) {
+      if (canvas && activeTelemetryView === 'graph') {
         const ctx = canvas.getContext('2d');
         if (ctx) {
           const width = canvas.width;
           const height = canvas.height;
 
-          // Shift data points left
           const points = dataPointsRef.current;
           points.shift();
 
-          // Generate next accelerometer Z value from real telemetry
           const currentG = latestAccelRef.current || 1.0;
-          const mappedY = 50 - (currentG - 1.0) * 25; 
-          
-          let noise = 0;
-          if (!isConnected && isSimulatingStream) {
-            noise = (Math.random() - 0.5) * 6;
-          }
-          const nextVal = Math.max(5, Math.min(95, mappedY + noise));
+          const baselineY = height * 0.65;
+          const scalePxPerG = height * 0.22;
+          const calculatedY = baselineY - (currentG - 1.0) * scalePxPerG;
+          const nextVal = Math.max(8, Math.min(height - 8, calculatedY));
           points.push(nextVal);
 
-          // Draw Canvas background & grid
+          // Clear
           ctx.clearRect(0, 0, width, height);
 
-          // Grid lines
-          ctx.strokeStyle = 'rgba(42, 42, 42, 0.5)';
+          // Subtle horizontal gridlines
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
           ctx.lineWidth = 1;
-          for (let y = 0; y < height; y += 20) {
+          for (let y = 15; y < height; y += 28) {
             ctx.beginPath();
             ctx.moveTo(0, y);
             ctx.lineTo(width, y);
             ctx.stroke();
           }
 
-          // Draw Gradient under curve
+          // 1.0g Resting Baseline line
+          ctx.strokeStyle = 'rgba(0, 245, 212, 0.2)';
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(0, baselineY);
+          ctx.lineTo(width, baselineY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Gradient under curve
           const gradient = ctx.createLinearGradient(0, 0, 0, height);
-          gradient.addColorStop(0, 'rgba(201, 160, 80, 0.35)');
-          gradient.addColorStop(1, 'rgba(201, 160, 80, 0)');
+          gradient.addColorStop(0, 'rgba(0, 245, 212, 0.35)');
+          gradient.addColorStop(1, 'rgba(0, 245, 212, 0)');
 
           ctx.beginPath();
           const dx = width / (points.length - 1);
           ctx.moveTo(0, height);
           ctx.lineTo(0, points[0]);
-
           for (let i = 1; i < points.length; i++) {
             ctx.lineTo(i * dx, points[i]);
           }
-
           ctx.lineTo(width, height);
           ctx.closePath();
           ctx.fillStyle = gradient;
           ctx.fill();
 
-          // Draw Stroke line
+          // Smooth curve stroke
           ctx.beginPath();
           ctx.moveTo(0, points[0]);
           for (let i = 1; i < points.length; i++) {
             ctx.lineTo(i * dx, points[i]);
           }
-          ctx.strokeStyle = '#c9a050';
-          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#00f5d4';
+          ctx.lineWidth = 2.5;
+          ctx.shadowColor = 'rgba(0, 245, 212, 0.6)';
+          ctx.shadowBlur = 10;
           ctx.stroke();
+          ctx.shadowBlur = 0;
         }
       }
-
       animId = requestAnimationFrame(render);
     };
 
     animId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animId);
-  }, [isSimulatingStream, isConnected]);
-
-  // Sound Feedback Toggle State
-  const [audioEnabled, setAudioEnabled] = useState(true);
+  }, [activeTelemetryView]);
 
   const toggleAudio = () => {
     audioEngine.enabled = !audioEnabled;
     setAudioEnabled(!audioEnabled);
   };
 
-  const handleSimulateJump = () => {
-    setJumpAnimation(true);
-    const newJump = parseFloat((42 + Math.random() * 7).toFixed(1)); 
-    
-    // Inject a massive waveform spike
-    const points = dataPointsRef.current;
-    if (points.length > 10) {
-      points[points.length - 8] = 95;
-      points[points.length - 6] = 10;
-      points[points.length - 4] = 85;
-      points[points.length - 2] = 30;
+  const handleQuickTare = () => {
+    if (onTare) {
+      onTare();
+    } else if (sensorState.connectionMode === 'ble') {
+      bleHardware.sendCommand('tare').catch((e) => console.warn(e));
     }
-
-    setTimeout(() => {
-      setJumpAnimation(false);
-      const isCricket = activeSport === 'cricket';
-      const isPeak = isCricket ? newJump > (sensorState.lastSwingVelocity || 0) : newJump > sensorState.maxJumpCm;
-      
-      audioEngine.playJumpChime(isPeak);
-
-      if (isCricket) {
-        setSensorState((prev) => ({
-          ...prev,
-          lastSwingVelocity: newJump * 20, // Scale it to look like a swing (e.g., 900 deg/s)
-          maxJumpCm: Math.max(prev.maxJumpCm, newJump * 20),
-          swingCount: (prev.swingCount || 0) + 1,
-          lastSwingDurationMs: Math.floor(300 + Math.random() * 150),
-          isNewPeak: isPeak,
-        }));
-      } else {
-        setSensorState((prev) => ({
-          ...prev,
-          lastJumpCm: newJump,
-          maxJumpCm: Math.max(prev.maxJumpCm, newJump),
-          totalJumps: prev.totalJumps + 1,
-          hangTimeMs: Math.floor(450 + Math.random() * 200),
-          landingImpactG: parseFloat((2.5 + Math.random() * 2).toFixed(1)),
-          takeoffAccelG: parseFloat((1.8 + Math.random() * 1.5).toFixed(1)),
-          isNewPeak: isPeak,
-        }));
-      }
-      onRecordJump(newJump);
-    }, 400);
+    jumpMetrics.resetMetrics();
+    setSensorState((prev) => ({
+      ...prev,
+      lastJumpCm: 0,
+    }));
+    setTareSuccess(true);
+    setTimeout(() => setTareSuccess(false), 1500);
   };
 
-  return (
-    <div className="pt-20 md:pt-24 px-5 md:px-10 max-w-4xl mx-auto space-y-6 pb-48 flex flex-col items-center">
-      {/* Top Telemetry Status Header */}
-      <div className="w-full flex justify-between items-center bg-white/5 border border-white/10 px-5 py-3 rounded-2xl backdrop-blur-md gap-3">
-        <div className="flex items-center gap-2">
-          <span className={`material-symbols-outlined ${isConnected ? 'text-[#c9a050]' : 'text-red-500'} filled`}>
-            {isConnected ? 'sensors' : 'sensors_off'}
-          </span>
-          <span className="font-data-label text-xs sm:text-sm text-white/80">
-            {isConnected ? 'ESP32: CONNECTED' : 'OFFLINE'}
-          </span>
-          <div className={`w-2.5 h-2.5 rounded-full ml-1 ${isConnected ? 'bg-[#00ff7f] pulse-dot-green' : 'bg-red-500 animate-pulse'}`} />
-        </div>
+  const displayJumpHeight = unit === 'in'
+    ? (sensorState.lastJumpCm / 2.54).toFixed(1)
+    : (sensorState.lastJumpCm || 0).toFixed(1);
 
-        <div className="flex items-center gap-4">
+  return (
+    <div className="pt-20 md:pt-24 px-4 md:px-8 max-w-5xl mx-auto space-y-5 pb-36">
+      {/* Top Action Ribbon */}
+      <div className="flex items-center justify-between gap-3 px-1">
+        {/* Prominent Calibrate / Tare Button */}
+        <button
+          onClick={handleQuickTare}
+          className={`px-4 py-2 rounded-xl text-xs font-mono font-semibold border transition-all cursor-pointer flex items-center gap-2 active:scale-95 shadow-sm ${
+            tareSuccess
+              ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+              : 'bg-white/[0.05] hover:bg-white/[0.09] border-white/10 text-white hover:border-[#00f5d4]/40'
+          }`}
+          title="Zero and calibrate sensor before jumping"
+        >
+          <span className="material-symbols-outlined text-sm text-[#00f5d4]">
+            {tareSuccess ? 'check_circle' : 'tune'}
+          </span>
+          <span>{tareSuccess ? 'Calibrated!' : 'Calibrate / Tare'}</span>
+        </button>
+
+        {/* Audio & Unit Controls */}
+        <div className="flex items-center gap-2">
+          {!sensorState.connected && onPairBLE && (
+            <button
+              onClick={onPairBLE}
+              className="px-3 py-1.5 rounded-xl bg-[#00f5d4]/10 hover:bg-[#00f5d4]/20 border border-[#00f5d4]/30 text-[#00f5d4] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
+            >
+              <span className="material-symbols-outlined text-sm">bluetooth</span>
+              <span>Connect</span>
+            </button>
+          )}
+
           <button
             onClick={toggleAudio}
-            className={`font-data-label text-xs flex items-center gap-1 uppercase tracking-wider font-semibold px-2.5 py-1 rounded-full border transition-all cursor-pointer ${
+            className={`w-9 h-9 rounded-xl border flex items-center justify-center transition-all cursor-pointer ${
               audioEnabled
-                ? 'bg-[#c9a050]/20 border-[#c9a050]/50 text-[#c9a050]'
-                : 'bg-white/5 border-white/10 text-white/40'
+                ? 'bg-[#00f5d4]/10 border-[#00f5d4]/30 text-[#00f5d4]'
+                : 'bg-white/[0.04] border-white/10 text-white/40'
             }`}
-            title={audioEnabled ? 'Audio Feedback Enabled' : 'Audio Feedback Muted'}
+            title={audioEnabled ? 'Voice/Chimes Active' : 'Audio Muted'}
           >
-            <span className="material-symbols-outlined text-sm">
+            <span className="material-symbols-outlined text-base">
               {audioEnabled ? 'volume_up' : 'volume_off'}
             </span>
-            <span className="hidden sm:inline">{audioEnabled ? 'Audio On' : 'Muted'}</span>
           </button>
 
-          <button
-            onClick={() => setIsSimulatingStream(!isSimulatingStream)}
-            className="font-data-label text-xs text-[#c9a050] hover:underline flex items-center gap-1 uppercase tracking-widest font-semibold cursor-pointer"
-          >
-            <span className="material-symbols-outlined text-sm">
-              {isSimulatingStream ? 'pause_circle' : 'play_circle'}
-            </span>
-            <span className="hidden sm:inline">{isSimulatingStream ? 'Live Streaming' : 'Paused'}</span>
-          </button>
+          <div className="flex rounded-xl bg-white/[0.04] p-0.5 border border-white/10 text-xs font-mono">
+            <button
+              onClick={() => setUnit('cm')}
+              className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                unit === 'cm' ? 'bg-[#00f5d4] text-black font-bold' : 'text-white/60 hover:text-white'
+              }`}
+            >
+              CM
+            </button>
+            <button
+              onClick={() => setUnit('in')}
+              className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                unit === 'in' ? 'bg-[#00f5d4] text-black font-bold' : 'text-white/60 hover:text-white'
+              }`}
+            >
+              IN
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Hero Card: Massive Centered Card for Last Jump */}
-      <section className="w-full max-w-md">
-        <div className="card-base p-6 md:p-8 relative flex flex-col items-center justify-center text-center overflow-hidden border border-white/10 bg-white/5 backdrop-blur-md shadow-2xl">
-          <div
-            className="absolute inset-0 opacity-15 pointer-events-none"
-            style={{ backgroundImage: 'radial-gradient(circle at center, #c9a050 0%, transparent 75%)' }}
-          />
+      {/* Hero Elevation Card */}
+      <section className="relative overflow-hidden rounded-3xl bg-gradient-to-b from-[#121722]/90 via-[#0e121a]/80 to-[#0b0d11] border border-white/[0.09] p-8 md:p-10 shadow-[0_20px_50px_rgba(0,0,0,0.6)] backdrop-blur-2xl">
+        <div className="absolute top-0 right-1/4 w-72 h-72 bg-[#00f5d4]/5 rounded-full blur-3xl pointer-events-none" />
 
-          <div className="mt-2 mb-4 flex flex-col items-center">
+        <div className="flex flex-col items-center justify-center text-center relative z-10">
+          {/* Header Badges */}
+          <div className="flex flex-wrap items-center justify-center gap-2 mb-4">
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.04] border border-white/10 text-xs font-mono font-medium text-white/80">
+              <span className="material-symbols-outlined text-sm text-[#00f5d4]">fitness_center</span>
+              <span className="text-[#00f5d4]">JUMPS:</span>
+              <span className="font-bold text-white">
+                {sensorState.totalJumps || jumpMetrics.totalJumps || 0}
+              </span>
+            </div>
+
             {sensorState.isNewPeak && (
-              <div className="mb-3 flex items-center gap-2 bg-[#c9a050]/20 border border-[#c9a050]/50 px-3 py-1 rounded-full animate-bounce">
-                <div className="w-2 h-2 rounded-full bg-[#c9a050] pulse-dot-cyan" />
-                <span className="font-data-label text-[11px] tracking-wider text-[#c9a050] uppercase font-bold">
-                  NEW PEAK
+              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-300 text-xs font-bold tracking-wider uppercase animate-bounce shadow-[0_0_15px_rgba(245,158,11,0.3)]">
+                <span className="material-symbols-outlined text-sm filled text-amber-400">local_fire_department</span>
+                <span>NEW PEAK</span>
+              </div>
+            )}
+
+            {jumpMetrics.jumpType && (
+              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.04] border border-white/10 text-xs font-mono font-medium text-white/80">
+                <span className="text-[#00f5d4]">TYPE:</span>
+                <span>
+                  {jumpMetrics.jumpType === 'CMJ'
+                    ? 'Countermovement (CMJ)'
+                    : jumpMetrics.jumpType === 'DJ'
+                    ? 'Drop Jump (DJ)'
+                    : 'Squat Jump (SJ)'}
                 </span>
               </div>
             )}
-            <h2 className="font-data-label text-xs text-white/50 tracking-[0.3em] uppercase mb-2 font-bold">
-              {activeSport === 'cricket' ? 'Last Swing' : 'Last Jump'}
-            </h2>
-            <div
-              className={`font-display-metrics text-5xl md:text-6xl text-[#c9a050] transition-transform duration-300 ${
-                jumpAnimation ? 'scale-110' : 'scale-100'
-              }`}
-            >
-              {activeSport === 'cricket' ? (
-                <>
-                  {(sensorState.lastSwingVelocity || 0).toFixed(1)}
-                  <span className="text-xl md:text-2xl text-white/50 ml-1 font-body-lg">
-                    deg/s
-                  </span>
-                </>
-              ) : (
-                <>
-                  {athleteProfile.units === 'imperial'
-                    ? (sensorState.lastJumpCm / 2.54).toFixed(1)
-                    : sensorState.lastJumpCm.toFixed(1)}
-                  <span className="text-xl md:text-2xl text-white/50 ml-1 font-body-lg">
-                    {athleteProfile.units === 'imperial' ? 'in' : 'cm'}
-                  </span>
-                </>
-              )}
-            </div>
           </div>
-        </div>
-      </section>
 
-      {/* 3D Visualization */}
-      <section className="w-full max-w-3xl h-64 md:h-80 my-4">
-        <JumpAvatar 
-          gyro={sensorState.gyro || { x:0, y:0, z:0 }}
-          accel={sensorState.accel || { x:0, y:1, z:0 }}
-          connected={isConnected}
-        />
-      </section>
+          <span className="text-xs uppercase tracking-[0.25em] font-medium text-white/40 mb-2">
+            VERTICAL ELEVATION
+          </span>
 
-      {/* Accelerometer Waveform Card */}
-      <section className="w-full max-w-3xl">
-        <div className="card-base p-4 md:p-6 flex flex-col gap-3 bg-white/5 border-white/10">
-          <div className="flex justify-between items-center px-1">
-            <div className="flex items-center gap-2">
-              <span className="font-data-label text-xs text-white/60 uppercase tracking-[0.2em]">
-                LIVE TELEMETRY (Z-AXIS)
-              </span>
-            </div>
-            <span className="font-data-label text-[11px] text-[#c9a050] bg-[#c9a050]/10 px-2.5 py-0.5 rounded-full border border-[#c9a050]/30 font-bold">
-              SYNCING {sensorState.samplingRateHz}Hz
+          {/* Large Metric Value */}
+          <div
+            className={`font-display-metrics text-6xl sm:text-7xl md:text-8xl font-black tracking-tight text-white flex items-baseline justify-center transition-transform duration-200 ${
+              jumpAnimation ? 'scale-105 text-[#00f5d4]' : ''
+            }`}
+          >
+            <span>{displayJumpHeight}</span>
+            <span className="text-2xl sm:text-3xl md:text-4xl text-[#00f5d4] ml-2 font-mono font-semibold">
+              {unit}
             </span>
           </div>
 
-          <div className="w-full h-36 bg-[#0a0a0a] rounded-xl border border-white/10 relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1/3 bg-gradient-to-b from-[#c9a050]/15 to-transparent pointer-events-none" />
-            <canvas
-              ref={canvasRef}
-              width={600}
-              height={144}
-              className="w-full h-full object-cover"
+          {/* Live Phase Pill */}
+          <div className="mt-5 flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-mono tracking-wider uppercase transition-all duration-200 bg-white/[0.04] border-white/10">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                jumpMetrics.jumpState === 'AIRBORNE'
+                  ? 'bg-[#00f5d4] animate-ping'
+                  : jumpMetrics.jumpState === 'TAKEOFF'
+                  ? 'bg-purple-400 animate-pulse'
+                  : jumpMetrics.jumpState === 'DIP'
+                  ? 'bg-amber-400'
+                  : jumpMetrics.jumpState === 'LANDING'
+                  ? 'bg-emerald-400'
+                  : 'bg-white/40'
+              }`}
             />
+            <span
+              className={
+                jumpMetrics.jumpState === 'AIRBORNE'
+                  ? 'text-[#00f5d4] font-bold'
+                  : jumpMetrics.jumpState === 'TAKEOFF'
+                  ? 'text-purple-300 font-semibold'
+                  : jumpMetrics.jumpState === 'DIP'
+                  ? 'text-amber-300'
+                  : jumpMetrics.jumpState === 'LANDING'
+                  ? 'text-emerald-300 font-semibold'
+                  : 'text-white/60'
+              }
+            >
+              Phase: {jumpMetrics.jumpState || 'READY'}
+            </span>
           </div>
         </div>
       </section>
 
-      {/* Metrics Bento Grid */}
-      {activeSport === 'cricket' ? (
-        <section className="w-full max-w-3xl grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-                repeat
-              </span>
-            </div>
-            <div>
-              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-                Total Swings
-              </div>
-              <div className="font-data-value text-lg text-white">
-                {sensorState.swingCount || 0}
-              </div>
-            </div>
+      {/* Telemetry Cockpit (3D Spatial Arena & Live 100Hz Waveform) */}
+      <section className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] backdrop-blur-xl p-5 md:p-6 space-y-4">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-lg text-[#00f5d4]">timeline</span>
+            <span className="text-xs font-mono uppercase tracking-wider text-white/70 font-semibold">
+              REAL-TIME KINEMATIC STREAM
+            </span>
           </div>
 
-          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-                schedule
-              </span>
-            </div>
-            <div>
-              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-                Last Duration
-              </div>
-              <div className="font-data-value text-lg text-white">
-                {sensorState.lastSwingDurationMs ? `${(sensorState.lastSwingDurationMs/1000).toFixed(2)}s` : '--'}
-              </div>
-            </div>
+          {/* View Mode Switcher */}
+          <div className="flex rounded-full bg-white/[0.04] p-0.5 border border-white/10 text-xs">
+            <button
+              onClick={() => setActiveTelemetryView('graph')}
+              className={`px-3 py-1 rounded-full transition-colors cursor-pointer flex items-center gap-1.5 ${
+                activeTelemetryView === 'graph'
+                  ? 'bg-[#00f5d4] text-black font-semibold'
+                  : 'text-white/60 hover:text-white'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">show_chart</span>
+              <span>G-Force Waveform</span>
+            </button>
+            <button
+              onClick={() => setActiveTelemetryView('3d')}
+              className={`px-3 py-1 rounded-full transition-colors cursor-pointer flex items-center gap-1.5 ${
+                activeTelemetryView === '3d'
+                  ? 'bg-[#00f5d4] text-black font-semibold'
+                  : 'text-white/60 hover:text-white'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">3d_rotation</span>
+              <span>3D Spatial</span>
+            </button>
           </div>
+        </div>
 
-          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-                speed
-              </span>
-            </div>
-            <div>
-              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-                Proc. Accel
+        {/* View Contents */}
+        {activeTelemetryView === 'graph' ? (
+          <div className="space-y-2">
+            <div className="w-full h-44 bg-[#090b0f] rounded-2xl border border-white/[0.06] relative overflow-hidden flex items-center justify-center">
+              <canvas
+                ref={canvasRef}
+                width={800}
+                height={176}
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute top-2.5 right-3 text-[10px] font-mono text-[#00f5d4] bg-[#00f5d4]/10 border border-[#00f5d4]/30 px-2 py-0.5 rounded-full font-semibold">
+                100Hz Tick
               </div>
-              <div className="font-data-value text-lg text-white">{sensorState.procAccelG}g</div>
+            </div>
+            <div className="flex justify-between items-center text-[11px] font-mono text-white/40 px-1">
+              <span>0g (Freefall Flight)</span>
+              <span>1.0g (Resting Gravity Baseline)</span>
+              <span>Resultant |a|</span>
             </div>
           </div>
+        ) : (
+          <div className="w-full h-64 md:h-72 rounded-2xl bg-[#090b0f] border border-white/[0.06] overflow-hidden relative">
+            <JumpAvatar
+              gyro={sensorState.gyro || { x: 0, y: 0, z: 0 }}
+              accel={sensorState.accel || { x: 0, y: 1, z: 0 }}
+              connected={sensorState.connected}
+            />
+            <div className="absolute bottom-2 left-3 text-[11px] font-mono text-white/50">
+              Drag to orbit 3D body orientation
+            </div>
+          </div>
+        )}
+      </section>
 
-          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-                wifi_tethering
-              </span>
-            </div>
-            <div>
-              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-                Stream
-              </div>
-              <div className="font-data-value text-lg text-white">
-                {sensorState.samplingRateHz}Hz
-              </div>
-            </div>
+      {/* 4 Core Athletic Biomechanics KPI Cards */}
+      <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+        {/* Hang Time */}
+        <div className="rounded-2xl bg-white/[0.03] border border-white/[0.08] p-4 md:p-5 backdrop-blur-xl flex flex-col justify-between hover:border-[#00f5d4]/40 transition-colors group">
+          <div className="flex items-center justify-between text-white/40 mb-2">
+            <span className="text-[11px] font-mono uppercase tracking-wider">Hang Time</span>
+            <span className="material-symbols-outlined text-base group-hover:text-[#00f5d4] transition-colors">
+              timer
+            </span>
           </div>
-        </section>
-      ) : (
-        <section className="w-full max-w-3xl grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-                repeat
-              </span>
+          <div>
+            <div className="font-display-metrics text-2xl md:text-3xl font-bold text-white">
+              {sensorState.hangTimeMs || jumpMetrics.hangTimeMs ? `${sensorState.hangTimeMs || jumpMetrics.hangTimeMs}` : '--'}
+              <span className="text-sm font-mono text-white/40 ml-1 font-normal">ms</span>
             </div>
-            <div>
-              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-                Total Jumps
-              </div>
-              <div className="font-data-value text-lg text-white">{sensorState.totalJumps}</div>
-            </div>
+            <div className="text-[11px] font-mono text-white/40 mt-1">Flight duration</div>
           </div>
+        </div>
 
-          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-                timer
-              </span>
-            </div>
-            <div>
-              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-                Hang Time
-              </div>
-              <div className="font-data-value text-lg text-white">
-                {sensorState.hangTimeMs ? `${sensorState.hangTimeMs}ms` : '--'}
-              </div>
-            </div>
+        {/* Takeoff Acceleration */}
+        <div className="rounded-2xl bg-white/[0.03] border border-white/[0.08] p-4 md:p-5 backdrop-blur-xl flex flex-col justify-between hover:border-[#00f5d4]/40 transition-colors group">
+          <div className="flex items-center justify-between text-white/40 mb-2">
+            <span className="text-[11px] font-mono uppercase tracking-wider">Takeoff Expl.</span>
+            <span className="material-symbols-outlined text-base group-hover:text-[#00f5d4] transition-colors">
+              arrow_upward
+            </span>
           </div>
-
-          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-                arrow_downward
-              </span>
+          <div>
+            <div className="font-display-metrics text-2xl md:text-3xl font-bold text-white">
+              {sensorState.takeoffAccelG || jumpMetrics.takeoffAccelG ? `${(sensorState.takeoffAccelG || jumpMetrics.takeoffAccelG || 0).toFixed(1)}` : '--'}
+              <span className="text-sm font-mono text-white/40 ml-1 font-normal">g</span>
             </div>
-            <div>
-              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-                Landing Impact
-              </div>
-              <div className="font-data-value text-lg text-white">
-                {sensorState.landingImpactG ? `${sensorState.landingImpactG}g` : '--'}
-              </div>
-            </div>
+            <div className="text-[11px] font-mono text-white/40 mt-1">Peak propulsion</div>
           </div>
+        </div>
 
-          <div className="card-base p-4 flex flex-col justify-between items-start gap-3 hover:border-white/30 transition-colors group bg-white/5 border-white/10">
-            <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:border-[#c9a050] transition-colors">
-              <span className="material-symbols-outlined text-white/60 group-hover:text-[#c9a050] text-base filled">
-                arrow_upward
-              </span>
-            </div>
-            <div>
-              <div className="font-data-label text-[11px] text-white/50 tracking-wider uppercase mb-1">
-                Takeoff Expl.
-              </div>
-              <div className="font-data-value text-lg text-white">
-                {sensorState.takeoffAccelG ? `${sensorState.takeoffAccelG}g` : '--'}
-              </div>
-            </div>
+        {/* Landing Impact Deceleration */}
+        <div className="rounded-2xl bg-white/[0.03] border border-white/[0.08] p-4 md:p-5 backdrop-blur-xl flex flex-col justify-between hover:border-red-400/40 transition-colors group">
+          <div className="flex items-center justify-between text-white/40 mb-2">
+            <span className="text-[11px] font-mono uppercase tracking-wider">Landing Force</span>
+            <span className="material-symbols-outlined text-base group-hover:text-red-400 transition-colors">
+              arrow_downward
+            </span>
           </div>
-        </section>
-      )}
+          <div>
+            <div className="flex items-baseline gap-2">
+              <span className="font-display-metrics text-2xl md:text-3xl font-bold text-white">
+                {sensorState.landingImpactG || jumpMetrics.landingImpactG ? `${(sensorState.landingImpactG || jumpMetrics.landingImpactG || 0).toFixed(1)}` : '--'}
+                <span className="text-sm font-mono text-white/40 ml-1 font-normal">g</span>
+              </span>
+              {(sensorState.landingImpactG || jumpMetrics.landingImpactG) ? (
+                <span
+                  className={`text-[9px] font-mono uppercase px-1.5 py-0.5 rounded font-bold ${
+                    (sensorState.landingImpactG || jumpMetrics.landingImpactG || 0) > 4.2
+                      ? 'bg-red-500/20 text-red-400'
+                      : (sensorState.landingImpactG || jumpMetrics.landingImpactG || 0) > 2.8
+                      ? 'bg-amber-500/20 text-amber-300'
+                      : 'bg-emerald-500/20 text-emerald-400'
+                  }`}
+                >
+                  {(sensorState.landingImpactG || jumpMetrics.landingImpactG || 0) > 4.2
+                    ? 'Heavy'
+                    : (sensorState.landingImpactG || jumpMetrics.landingImpactG || 0) > 2.8
+                    ? 'Mod.'
+                    : 'Safe'}
+                </span>
+              ) : null}
+            </div>
+            <div className="text-[11px] font-mono text-white/40 mt-1">Deceleration impact</div>
+          </div>
+        </div>
 
-      <div className="fixed w-full z-40 bg-[#0a0a0a]/90 backdrop-blur-md border-t border-white/10 p-4 pb-6 md:pb-6 flex justify-center items-center shadow-[0_-10px_40px_rgba(0,0,0,0.8)] bottom-20 md:bottom-0 gap-3">
-        <button
-          onClick={onTriggerSessionStart}
-          className="flex-1 max-w-xs bg-[#c9a050] hover:bg-[#d9b060] text-black font-data-value text-sm py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 shadow-lg cursor-pointer uppercase tracking-[0.2em] font-bold"
-        >
-          <span className="material-symbols-outlined filled">play_circle</span>
-          Start Session
-        </button>
-        <button
-          onClick={handleSimulateJump}
-          className="flex-1 max-w-xs bg-emerald-500 hover:bg-emerald-400 text-black font-data-value text-sm py-4 rounded-full transition-transform active:scale-95 flex justify-center items-center gap-2 shadow-lg cursor-pointer uppercase tracking-[0.2em] font-bold"
-        >
-          <span className="material-symbols-outlined filled">bolt</span>
-          {activeSport === 'cricket' ? 'Simulate Swing' : 'Simulate Jump'}
-        </button>
+        {/* Reactive Strength Index (RSI) */}
+        <div className="rounded-2xl bg-white/[0.03] border border-white/[0.08] p-4 md:p-5 backdrop-blur-xl flex flex-col justify-between hover:border-[#00f5d4]/40 transition-colors group">
+          <div className="flex items-center justify-between text-white/40 mb-2">
+            <span className="text-[11px] font-mono uppercase tracking-wider">Reactive RSI</span>
+            <span className="material-symbols-outlined text-base group-hover:text-[#00f5d4] transition-colors">
+              electric_bolt
+            </span>
+          </div>
+          <div>
+            <div className="font-display-metrics text-2xl md:text-3xl font-bold text-[#00f5d4]">
+              {sensorState.rsi || jumpMetrics.rsi ? `${(sensorState.rsi || jumpMetrics.rsi || 0).toFixed(2)}` : '--'}
+            </div>
+            <div className="text-[11px] font-mono text-white/40 mt-1">Flight / ground contact</div>
+          </div>
+        </div>
+      </section>
+
+      {/* Floating Bottom Workout Dock */}
+      <div className="fixed bottom-20 md:bottom-4 left-0 right-0 z-40 px-4 flex justify-center pointer-events-none">
+        <div className="pointer-events-auto flex items-center gap-3 p-2 rounded-full bg-[#0b0d11]/90 backdrop-blur-2xl border border-white/[0.12] shadow-[0_15px_40px_rgba(0,0,0,0.8)]">
+          <button
+            onClick={onToggleSession}
+            className={`px-6 py-3.5 rounded-full text-xs font-bold uppercase tracking-wider transition-all duration-300 active:scale-95 flex items-center gap-2.5 cursor-pointer shadow-lg ${
+              isSessionActive
+                ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-[0_0_25px_rgba(225,29,72,0.5)] border border-rose-400/40'
+                : 'bg-[#00f5d4] hover:bg-[#33ffdf] text-black shadow-[0_0_20px_rgba(0,245,212,0.4)]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-base filled">
+              {isSessionActive ? 'stop_circle' : 'play_circle'}
+            </span>
+            {isSessionActive ? (
+              <span>
+                Stop Workout ({Math.floor(sessionElapsedSec / 60).toString().padStart(2, '0')}:{(sessionElapsedSec % 60).toString().padStart(2, '0')})
+              </span>
+            ) : (
+              <span>Start Workout</span>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

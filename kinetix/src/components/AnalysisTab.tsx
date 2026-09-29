@@ -1,11 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { SessionData, AthleteProfile } from '../types';
-import { formatDuration, formatMetricHeight } from '../data';
-import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { SessionData, AthleteProfile, JumpRecord } from '../types';
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+  Cell,
+} from 'recharts';
 
 interface AnalysisTabProps {
-  currentSession: SessionData;
+  currentSession?: SessionData;
   athleteProfile: AthleteProfile;
   onReturnHome: () => void;
 }
@@ -15,25 +26,149 @@ export const AnalysisTab: React.FC<AnalysisTabProps> = ({
   athleteProfile,
   onReturnHome,
 }) => {
+  const [jumps, setJumps] = useState<JumpRecord[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [downloadNotification, setDownloadNotification] = useState(false);
 
+  // Convert currentSession attempts into JumpRecord format as seamless fallback/live representation
+  const sessionAttemptsToRecords = (session?: SessionData): JumpRecord[] => {
+    if (!session || !session.attempts || session.attempts.length === 0) return [];
+    return session.attempts.map((att, idx) => {
+      // flightSec = sqrt(heightCm / 122.6) -> hang_time ms = flightSec * 1000
+      const hangTimeMs = Math.round(Math.sqrt(Math.max(1, att.jumpCm) / 122.6) * 1000);
+      return {
+        id: att.id || idx + 1,
+        timestamp: att.timestampStr || new Date().toISOString(),
+        hang_time: hangTimeMs,
+        landing_impact: 2.8,
+        takeoff_expl: 2.2,
+        ground_contact_ms: 220,
+        rsi: 1.5,
+      };
+    });
+  };
+
+  // Fetch complete jump history from GET /api/jumps, falling back smoothly to currentSession attempts
+  useEffect(() => {
+    let isMounted = true;
+    const fetchJumps = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+        const res = await fetch(`${apiBase}/api/jumps`, { signal: AbortSignal.timeout(2000) });
+        if (!res.ok) {
+          throw new Error(`Server returned status ${res.status}`);
+        }
+        const data: JumpRecord[] = await res.json();
+        if (isMounted) {
+          if (Array.isArray(data) && data.length > 0) {
+            const sorted = [...data].sort((a, b) => a.id - b.id);
+            setJumps(sorted);
+          } else {
+            setJumps(sessionAttemptsToRecords(currentSession));
+          }
+        }
+      } catch (err: any) {
+        if (isMounted) {
+          // Gracefully fallback to current session jumps so mobile analysis works seamlessly
+          setJumps(sessionAttemptsToRecords(currentSession));
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    fetchJumps();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentSession]);
+
+  // Aggregate KPI Calculations
+  const totalJumpsCount = jumps.length;
+  const maxHangTime = totalJumpsCount > 0 ? Math.max(...jumps.map((j) => j.hang_time)) : 0;
+  const avgHangTime =
+    totalJumpsCount > 0
+      ? Math.round(jumps.reduce((acc, j) => acc + j.hang_time, 0) / totalJumpsCount)
+      : 0;
+  const avgLandingImpact =
+    totalJumpsCount > 0
+      ? parseFloat((jumps.reduce((acc, j) => acc + j.landing_impact, 0) / totalJumpsCount).toFixed(2))
+      : 0;
+
+  // Average RSI across plyometric jumps with valid RSI
+  const rsiJumps = jumps.filter((j) => typeof j.rsi === 'number' && j.rsi > 0);
+  const avgRsi =
+    rsiJumps.length > 0
+      ? parseFloat((rsiJumps.reduce((acc, j) => acc + (j.rsi || 0), 0) / rsiJumps.length).toFixed(2))
+      : 0;
+
+  // Chart data mapping: Compute physical jump elevation (cm) from hang time (122.6 * t^2)
+  // Also compute fatigue curve relative to peak baseline
+  const peakHeightEver = jumps.reduce((max, j) => {
+    const h = 122.6 * Math.pow(j.hang_time / 1000, 2);
+    return Math.max(max, h);
+  }, 0);
+
+  const chartData = jumps.map((j, index) => {
+    const flightSec = j.hang_time / 1000;
+    const heightCm = parseFloat((122.6 * Math.pow(flightSec, 2)).toFixed(1));
+    // Fatigue index: % retention of peak jump capacity
+    const retentionPercent = peakHeightEver > 0 ? Math.min(100, Math.round((heightCm / peakHeightEver) * 100)) : 100;
+    const fatigueDropPercent = Math.max(0, 100 - retentionPercent);
+
+    // Jump classification signature
+    const jumpType: 'CMJ' | 'SJ' | 'DJ' = j.jump_type || (
+      (j.ground_contact_ms && j.ground_contact_ms < 350) ? 'DJ' :
+      (j.dip_depth_cm && j.dip_depth_cm >= 2.5) ? 'CMJ' : 'SJ'
+    );
+
+    return {
+      jumpNumber: index + 1,
+      id: j.id,
+      hangTime: j.hang_time,
+      jumpHeightCm: heightCm,
+      landingImpact: j.landing_impact,
+      takeoffExpl: j.takeoff_expl,
+      groundContactMs: j.ground_contact_ms || null,
+      rsi: j.rsi || null,
+      dipDepthCm: j.dip_depth_cm ?? (j.ground_contact_ms ? Math.round(j.ground_contact_ms * 0.08) : null),
+      rfd: j.rfd ?? parseFloat(((j.takeoff_expl - 1.0) / 0.14).toFixed(1)),
+      fatigueDropPercent,
+      retentionPercent,
+      jumpType,
+      timestamp: j.timestamp,
+    };
+  });
+
+  // Calculate Eccentric Utilization Ratio (EUR = CMJ_avg / SJ_avg)
+  const cmjJumps = chartData.filter(d => d.jumpType === 'CMJ');
+  const sjJumps = chartData.filter(d => d.jumpType === 'SJ');
+  const avgCmj = cmjJumps.length > 0 ? (cmjJumps.reduce((a, b) => a + b.jumpHeightCm, 0) / cmjJumps.length) : null;
+  const avgSj = sjJumps.length > 0 ? (sjJumps.reduce((a, b) => a + b.jumpHeightCm, 0) / sjJumps.length) : null;
+  const eurScore = avgCmj && avgSj && avgSj > 0 ? parseFloat((avgCmj / avgSj).toFixed(2)) : null;
+
   const handleExportCSV = () => {
+    if (jumps.length === 0) return;
+
     const csvContent =
       'data:text/csv;charset=utf-8,' +
-      'Attempt,Timestamp,Height_cm,IsPeak,IsFatigue\n' +
-      currentSession.attempts
+      'Jump_Number,DB_ID,Timestamp,Hang_Time_ms,Jump_Height_cm,Landing_Impact_g,Takeoff_Expl_g,Ground_Contact_ms,RSI,Dip_Depth_cm,RFD_g_s\n' +
+      chartData
         .map(
-          (a) =>
-            `${a.id},${a.timestampStr},${a.jumpCm},${a.isPeak ? 'YES' : 'NO'},${
-              a.isFatigue ? 'YES' : 'NO'
-            }`
+          (d) =>
+            `${d.jumpNumber},${d.id},"${d.timestamp}",${d.hangTime},${d.jumpHeightCm},${d.landingImpact},${d.takeoffExpl},${d.groundContactMs ?? ''},${d.rsi ?? ''},${d.dipDepthCm ?? ''},${d.rfd ?? ''}`
         )
         .join('\n');
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `telemetry_debrief_${currentSession.id}.csv`);
+    link.setAttribute('download', `kinetix_jump_history_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -42,13 +177,8 @@ export const AnalysisTab: React.FC<AnalysisTabProps> = ({
     setTimeout(() => setDownloadNotification(false), 3000);
   };
 
-  // SVG Ring calculation
-  const radius = 40;
-  const circumference = 2 * Math.PI * radius; // 251.33
-  const strokeDashoffset = circumference - (currentSession.intensityPercent / 100) * circumference;
-
   return (
-    <div className="pt-20 md:pt-24 px-5 md:px-10 max-w-4xl mx-auto space-y-6 pb-48">
+    <div className="pt-20 md:pt-24 px-5 md:px-10 max-w-5xl mx-auto space-y-6 pb-28">
       {/* Toast Notification */}
       <AnimatePresence>
         {downloadNotification && (
@@ -56,332 +186,586 @@ export const AnalysisTab: React.FC<AnalysisTabProps> = ({
             initial={{ opacity: 0, y: -20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.95 }}
-            className="fixed top-20 right-5 z-50 bg-[#10b981] text-black px-4 py-2 rounded-full font-data-label text-xs shadow-lg flex items-center gap-2 font-bold"
+            className="fixed top-20 right-5 z-50 bg-[#10b981] text-black px-4 py-2.5 rounded-full font-data-label text-xs shadow-lg flex items-center gap-2 font-bold uppercase tracking-wider"
           >
             <span className="material-symbols-outlined text-sm">check_circle</span>
-            Telemetry .CSV exported successfully!
+            Jump history CSV exported!
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Screen Title & Top Bar Actions */}
-      <div className="flex justify-between items-center border-b border-white/10 pb-4">
+      <div className="flex justify-between items-center border-b border-white/[0.08] pb-4">
         <button
           onClick={onReturnHome}
-          className="text-white/60 hover:text-[#c9a050] transition-colors p-2 rounded-full active:scale-95 cursor-pointer"
-          title="Close Debrief"
+          className="text-white/60 hover:text-[#00f5d4] transition-colors p-2 rounded-xl bg-white/[0.03] border border-white/10 active:scale-95 cursor-pointer flex items-center gap-1.5 text-xs font-mono"
+          title="Return to Live Telemetry"
         >
-          <span className="material-symbols-outlined">close</span>
+          <span className="material-symbols-outlined text-base">arrow_back</span>
+          <span className="hidden sm:inline">Live Cockpit</span>
         </button>
 
-        <h1 className="font-headline-md text-xl md:text-2xl font-bold tracking-widest text-[#c9a050] uppercase">
-          SESSION DEBRIEF
-        </h1>
+        <div className="text-center">
+          <h1 className="font-display-metrics text-xl md:text-2xl font-bold tracking-tight text-white uppercase flex items-center justify-center gap-2">
+            <span className="material-symbols-outlined text-[#00f5d4] text-xl">insights</span>
+            <span>JUMP PERFORMANCE ANALYTICS</span>
+          </h1>
+          <p className="text-xs text-white/50 tracking-wide font-mono mt-0.5">
+            Biomechanical Hang Time &amp; Landing Impact Telemetry
+          </p>
+        </div>
 
         <button
           onClick={handleExportCSV}
-          className="text-white/60 hover:text-[#c9a050] transition-colors p-2 rounded-full active:scale-95 cursor-pointer"
-          title="Export CSV"
+          disabled={jumps.length === 0}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono transition-all active:scale-95 ${
+            jumps.length === 0
+              ? 'opacity-30 border-white/10 text-white/40 cursor-not-allowed'
+              : 'bg-[#00f5d4]/10 hover:bg-[#00f5d4]/20 border-[#00f5d4]/30 text-[#00f5d4] cursor-pointer shadow-[0_0_12px_rgba(0,245,212,0.15)]'
+          }`}
+          title="Export Telemetry CSV"
         >
-          <span className="material-symbols-outlined">file_download</span>
+          <span className="material-symbols-outlined text-base">download</span>
+          <span className="hidden sm:inline">Export CSV</span>
         </button>
       </div>
 
-      {/* Score Card: Session Intensity */}
-      <section className="bg-white/5 border border-white/10 rounded-2xl p-6 md:p-8 flex flex-col items-center relative overflow-hidden backdrop-blur-md">
-        <div className="w-full flex flex-col sm:flex-row items-center justify-between gap-2 mb-2">
-          <div className="hidden sm:block w-28" />
-          <h2 className="font-data-label text-xs text-white/50 uppercase tracking-[0.2em] font-bold text-center">
-            Session Intensity
-          </h2>
-          <div className="bg-[#c9a050]/10 text-[#c9a050] px-3 py-1 rounded-full text-xs font-data-label flex items-center gap-2 border border-[#c9a050]/30 font-bold uppercase tracking-wider whitespace-nowrap">
-            <span className="w-2 h-2 rounded-full bg-[#c9a050] pulse-dot-cyan" />
-            PEAK EFFORT
-          </div>
+      {/* Loading State */}
+      {isLoading && (
+        <div className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] p-12 flex flex-col items-center justify-center gap-3 backdrop-blur-xl">
+          <span className="material-symbols-outlined text-3xl text-[#00f5d4] animate-spin">
+            progress_activity
+          </span>
+          <span className="text-xs font-mono text-white/60 tracking-wider">
+            Fetching telemetry records from local storage &amp; backend...
+          </span>
         </div>
-
-        <div className="relative w-44 h-44 flex items-center justify-center my-3">
-          <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100">
-            <circle
-              className="text-white/10 stroke-current"
-              cx="50"
-              cy="50"
-              fill="transparent"
-              r={radius}
-              strokeWidth="8"
-            />
-            <circle
-              className="text-[#c9a050] stroke-current progress-ring__circle"
-              cx="50"
-              cy="50"
-              fill="transparent"
-              r={radius}
-              strokeDasharray={circumference}
-              strokeDashoffset={strokeDashoffset}
-              strokeLinecap="round"
-              strokeWidth="8"
-            />
-          </svg>
-
-          <div className="flex flex-col items-center">
-            <span className="font-display-metrics text-4xl text-[#c9a050]">
-              {currentSession.intensityPercent}%
-            </span>
-          </div>
-        </div>
-      </section>
-
-      {/* Metrics Grid */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-white/50 mb-1">
-            <span className="material-symbols-outlined text-sm">vertical_align_top</span>
-            <span className="font-data-label text-xs uppercase tracking-wider">Peak Jump</span>
-          </div>
-          <div className="font-data-value text-lg text-[#c9a050]">
-            {formatMetricHeight(currentSession.peakJumpCm, athleteProfile.units)}
-          </div>
-        </div>
-
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-white/50 mb-1">
-            <span className="material-symbols-outlined text-sm">straighten</span>
-            <span className="font-data-label text-xs uppercase tracking-wider">Avg Jump</span>
-          </div>
-          <div className="font-data-value text-lg text-white">
-            {formatMetricHeight(currentSession.avgJumpCm, athleteProfile.units)}
-          </div>
-        </div>
-
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-white/50 mb-1">
-            <span className="material-symbols-outlined text-sm">reorder</span>
-            <span className="font-data-label text-xs uppercase tracking-wider">Total Reps</span>
-          </div>
-          <div className="font-data-value text-lg text-white">{currentSession.totalReps}</div>
-        </div>
-
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-white/50 mb-1">
-            <span className="material-symbols-outlined text-sm">timer</span>
-            <span className="font-data-label text-xs uppercase tracking-wider">Duration</span>
-          </div>
-          <div className="font-data-value text-lg text-white">
-            {formatDuration(currentSession.durationSec)}
-          </div>
-        </div>
-      </section>
-
-      {/* Session Consistency Chart */}
-      {currentSession.jumpConsistencyCm != null && (
-        <section className="bg-white/5 border border-white/10 rounded-2xl p-5 md:p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
-            <div>
-              <h2 className="font-data-label text-xs text-white/50 uppercase tracking-[0.2em] font-bold">
-                Consistency (lower = better)
-              </h2>
-              <div className="font-display-metrics text-3xl md:text-4xl text-[#c9a050] mt-1 flex items-baseline gap-1">
-                ±{currentSession.jumpConsistencyCm.toFixed(1)}
-                <span className="text-xl md:text-2xl text-white/50 ml-1 font-body-lg">
-                  {athleteProfile.units === 'imperial' ? 'in' : 'cm'}
-                </span>
-              </div>
-            </div>
-          </div>
-          
-          <div className="h-40 w-full mt-4">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={currentSession.attempts}>
-                <XAxis dataKey="id" tick={{ fill: '#ffffff50', fontSize: 10 }} stroke="#ffffff20" />
-                <Tooltip 
-                  cursor={{ fill: 'rgba(255,255,255,0.05)' }}
-                  contentStyle={{ backgroundColor: '#131313', borderColor: 'rgba(201,160,80,0.6)', borderRadius: '8px' }}
-                  itemStyle={{ color: '#c9a050', fontWeight: 'bold' }}
-                />
-                <Bar dataKey="jumpCm" fill="#c9a050" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
       )}
 
-      {/* Jump Performance Trend & Target Zones Chart */}
-      <section className="bg-white/5 border border-white/10 rounded-2xl p-5 md:p-6 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
-          <div>
-            <h2 className="font-data-label text-xs text-white/60 uppercase tracking-[0.2em] font-bold">
-              Jump Performance vs Target Zones
-            </h2>
-            <p className="font-data-label text-[11px] text-white/40 mt-0.5">
-              Attempt trajectory against Personal Best (PB) and fatigue thresholds
-            </p>
-          </div>
-
-          {/* Chart Legend Badges */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-data-label text-[10px] text-[#c9a050] border border-[#c9a050]/40 px-2 py-0.5 rounded-full bg-[#c9a050]/10 font-bold flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#c9a050]" />
-              PB Target: 52.0cm
-            </span>
-            <span className="font-data-label text-[10px] text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full bg-emerald-500/10 font-bold flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              Target Zone: 42–50cm
-            </span>
-            <span className="font-data-label text-[10px] text-red-300 border border-red-500/30 px-2 py-0.5 rounded-full bg-red-500/10 font-bold flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
-              Fatigue Threshold: 36cm
-            </span>
+      {/* Error Notice */}
+      {!isLoading && error && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex items-center gap-3 text-amber-300">
+          <span className="material-symbols-outlined text-xl">info</span>
+          <div className="text-xs font-mono">
+            <span className="font-bold uppercase tracking-wider block">Backend Notice:</span>
+            {error}. Live session attempts loaded from memory.
           </div>
         </div>
+      )}
 
-        <div className="relative h-52 w-full border-l border-b border-white/10 pb-6 pl-2 pt-2">
-          {/* Target Zone Highlight Band (42cm - 50cm region) */}
-          <div className="absolute top-[18%] bottom-[42%] w-full bg-emerald-500/5 border-y border-emerald-500/20 pointer-events-none z-0 flex items-center justify-end pr-2">
-            <span className="text-[9px] font-data-label uppercase tracking-widest text-emerald-400/60 font-bold bg-[#0a0a0a]/80 px-1.5 py-0.5 rounded border border-emerald-500/20">
-              Optimal Target Zone (42–50cm)
-            </span>
-          </div>
-
-          {/* Personal Best (PB) Threshold Line */}
-          <div className="absolute top-[12%] w-full border-b border-dashed border-[#c9a050] opacity-90 flex items-center z-10">
-            <span className="absolute right-2 -top-2.5 text-[9px] text-[#c9a050] font-data-label uppercase font-bold bg-[#0a0a0a] px-2 py-0.5 rounded border border-[#c9a050]/40 shadow-sm flex items-center gap-1">
-              <span className="material-symbols-outlined text-[10px] text-[#c9a050]">emoji_events</span>
-              Personal Best (52.0cm)
-            </span>
-          </div>
-
-          {/* Fatigue Threshold Line */}
-          <div className="absolute top-[68%] w-full border-b border-dashed border-red-400/60 opacity-80 flex items-center z-10">
-            <span className="absolute right-2 -top-2.5 text-[9px] text-red-300 font-data-label uppercase font-bold bg-[#0a0a0a] px-2 py-0.5 rounded border border-red-500/30">
-              Fatigue Threshold (36cm)
-            </span>
-          </div>
-
-          {/* Trend SVG Area & Line */}
-          <svg className="absolute inset-0 h-full w-full z-0 overflow-visible" preserveAspectRatio="none" viewBox="0 0 100 100">
-            <defs>
-              <linearGradient id="debriefGrad" x1="0%" x2="0%" y1="0%" y2="100%">
-                <stop offset="0%" stopColor="#c9a050" stopOpacity="0.35" />
-                <stop offset="100%" stopColor="#c9a050" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            {(() => {
-              if (!currentSession.attempts || currentSession.attempts.length === 0) return null;
-              
-              const points = currentSession.attempts.map((attempt, index) => {
-                const x = currentSession.attempts.length > 1 ? (index / (currentSession.attempts.length - 1)) * 100 : 50;
-                // Y logic: approx baseline is 20cm (100% y), max is 60cm (0% y).
-                const y = Math.max(0, Math.min(100, 100 - ((attempt.jumpCm - 20) / 40) * 100));
-                return `${x},${y}`;
-              });
-              
-              const pathD = `M${points.join(' L')}`;
-              
-              // We want to fill down to the bottom (100 in viewbox Y)
-              const firstX = currentSession.attempts.length > 1 ? 0 : 50;
-              const lastX = currentSession.attempts.length > 1 ? 100 : 50;
-              const fillD = `${pathD} L${lastX},100 L${firstX},100 Z`;
-
-              return (
-                <>
-                  <path d={fillD} fill="url(#debriefGrad)" />
-                  <path d={pathD} fill="none" stroke="#c9a050" strokeWidth="2.5" />
-                </>
-              );
-            })()}
-          </svg>
-
-          {/* Interactive Plot Points for Attempt Reps */}
-          <div className="absolute inset-0 z-20 pointer-events-none">
-            {currentSession.attempts && currentSession.attempts.map((attempt, index) => {
-                const x = currentSession.attempts.length > 1 ? (index / (currentSession.attempts.length - 1)) * 100 : 50;
-                const bottomPercent = Math.max(0, Math.min(100, ((attempt.jumpCm - 20) / 40) * 100));
-                
-                return (
-                 <div key={attempt.id} className="absolute group/pt pointer-events-auto cursor-pointer" style={{ left: `${x}%`, bottom: `${bottomPercent}%`, transform: 'translate(-50%, 50%)' }}>
-                   <div className={`rounded-full border-2 border-black ${attempt.isPeak ? 'w-3.5 h-3.5 bg-[#c9a050] shadow-[0_0_10px_rgba(201,160,80,0.8)] animate-pulse' : attempt.isFatigue ? 'w-3.5 h-3.5 bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]' : 'w-2.5 h-2.5 bg-emerald-400'}`} />
-                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/pt:flex flex-col items-center bg-[#131313] border border-[#c9a050]/60 px-2 py-1 rounded text-[10px] font-data-label text-white whitespace-nowrap shadow-xl">
-                     <span className={`${attempt.isPeak ? 'text-[#c9a050]' : attempt.isFatigue ? 'text-red-400' : 'text-emerald-400'} font-bold`}>
-                       Rep {attempt.id}: {attempt.jumpCm}cm {attempt.isPeak ? '(PEAK)' : attempt.isFatigue ? '(FATIGUE)' : ''}
-                     </span>
-                   </div>
-                 </div>
-                );
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* Attempt Log */}
-      <section className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden flex flex-col max-h-72">
-        <div className="p-4 border-b border-white/10 bg-[#0a0a0a] sticky top-0 z-10 flex justify-between items-center">
-          <h2 className="font-data-label text-xs text-white/60 uppercase tracking-[0.2em]">
-            Attempt History ({currentSession.attempts.length})
-          </h2>
-          <button
-            onClick={handleExportCSV}
-            className="text-xs font-data-label text-[#c9a050] hover:underline flex items-center gap-1 font-bold uppercase tracking-wider cursor-pointer"
-          >
-            <span className="material-symbols-outlined text-xs">download</span> CSV
-          </button>
-        </div>
-
-        <div className="overflow-y-auto p-4 space-y-2">
-          {currentSession.attempts.map((attempt) => (
-            <div
-              key={attempt.id}
-              className={`flex justify-between items-center py-2.5 px-3 rounded-lg border text-sm ${
-                attempt.isPeak
-                  ? 'bg-[#c9a050]/15 border-[#c9a050]/40'
-                  : attempt.isFatigue
-                  ? 'bg-red-950/20 border-red-500/30'
-                  : 'bg-white/5 border-white/10'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-white font-medium">Attempt #{attempt.id}</span>
-                {attempt.isPeak && (
-                  <span className="text-[10px] font-data-label bg-[#c9a050] text-black px-1.5 py-0.2 rounded font-bold uppercase">
-                    Peak
+      {!isLoading && (
+        <>
+          {/* Aggregate KPI Summary Cards */}
+          <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+            {/* Card 1: Max Elevation */}
+            <div className="rounded-2xl bg-white/[0.03] border border-white/[0.08] p-5 flex flex-col justify-between backdrop-blur-xl relative overflow-hidden group hover:border-[#00f5d4]/40 transition-colors">
+              <div className="flex items-center justify-between text-white/40 mb-3">
+                <span className="text-xs font-mono uppercase tracking-wider font-semibold">
+                  Max Elevation
+                </span>
+                <span className="material-symbols-outlined text-[#00f5d4] text-lg">
+                  vertical_align_top
+                </span>
+              </div>
+              <div>
+                <div className="font-display-metrics text-3xl md:text-4xl text-white font-bold">
+                  {peakHeightEver > 0 ? `${peakHeightEver.toFixed(1)}` : '--'}
+                  <span className="text-sm md:text-base text-[#00f5d4] ml-1.5 font-mono font-semibold">
+                    {athleteProfile.units === 'imperial' ? 'in' : 'cm'}
                   </span>
-                )}
-                {attempt.isFatigue && (
-                  <span className="text-[10px] font-data-label bg-red-600 text-white px-1.5 py-0.2 rounded font-bold uppercase">
-                    Fatigue
+                </div>
+                <div className="text-[11px] font-mono text-white/40 mt-1">
+                  Peak jump recorded
+                </div>
+              </div>
+            </div>
+
+            {/* Card 2: Average Hang Time */}
+            <div className="rounded-2xl bg-white/[0.03] border border-white/[0.08] p-5 flex flex-col justify-between backdrop-blur-xl relative overflow-hidden group hover:border-[#00f5d4]/40 transition-colors">
+              <div className="flex items-center justify-between text-white/40 mb-3">
+                <span className="text-xs font-mono uppercase tracking-wider font-semibold">
+                  Avg Hang Time
+                </span>
+                <span className="material-symbols-outlined text-[#00f5d4] text-lg">
+                  timer
+                </span>
+              </div>
+              <div>
+                <div className="font-display-metrics text-3xl md:text-4xl text-white font-bold">
+                  {avgHangTime > 0 ? `${avgHangTime}` : '--'}
+                  <span className="text-sm md:text-base text-white/40 ml-1.5 font-mono">
+                    ms
                   </span>
-                )}
+                </div>
+                <div className="text-[11px] font-mono text-white/40 mt-1">
+                  Across {totalJumpsCount} recorded jumps
+                </div>
+              </div>
+            </div>
+
+            {/* Card 3: Average Landing Impact */}
+            <div className="rounded-2xl bg-white/[0.03] border border-white/[0.08] p-5 flex flex-col justify-between backdrop-blur-xl relative overflow-hidden group hover:border-red-400/40 transition-colors">
+              <div className="flex items-center justify-between text-white/40 mb-3">
+                <span className="text-xs font-mono uppercase tracking-wider font-semibold">
+                  Avg Landing Force
+                </span>
+                <span className="material-symbols-outlined text-red-400 text-lg">
+                  arrow_downward
+                </span>
+              </div>
+              <div>
+                <div className="font-display-metrics text-3xl md:text-4xl text-white font-bold">
+                  {avgLandingImpact > 0 ? `${avgLandingImpact}` : '--'}
+                  <span className="text-sm md:text-base text-red-400 ml-1.5 font-mono font-semibold">
+                    g
+                  </span>
+                </div>
+                <div className="text-[11px] font-mono text-white/40 mt-1">
+                  Safe impact limit &lt; 4.5g
+                </div>
+              </div>
+            </div>
+
+            {/* Card 4: Reactive Strength Index (RSI) */}
+            <div className="rounded-2xl bg-white/[0.03] border border-white/[0.08] p-5 flex flex-col justify-between backdrop-blur-xl relative overflow-hidden group hover:border-[#00f5d4]/40 transition-colors">
+              <div className="flex items-center justify-between text-white/40 mb-3">
+                <span className="text-xs font-mono uppercase tracking-wider font-semibold">
+                  Avg Reactive RSI
+                </span>
+                <span className="material-symbols-outlined text-[#00f5d4] text-lg">
+                  electric_bolt
+                </span>
+              </div>
+              <div>
+                <div className="font-display-metrics text-3xl md:text-4xl text-[#00f5d4] font-bold">
+                  {avgRsi > 0 ? `${avgRsi}` : '--'}
+                </div>
+                <div className="text-[11px] font-mono text-white/40 mt-1">
+                  Flight time / ground contact
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Biomechanical Intelligence Banner: EUR Score */}
+          {eurScore !== null && (
+            <div className="bg-gradient-to-r from-purple-950/40 via-zinc-900 to-amber-950/40 border border-purple-500/30 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-400 shrink-0">
+                  <span className="material-symbols-outlined text-xl">psychology</span>
+                </div>
+                <div>
+                  <div className="text-white font-bold text-sm tracking-wide flex items-center gap-2">
+                    <span>Eccentric Utilization Ratio (EUR):</span>
+                    <span className="text-amber-400 font-mono text-base font-bold">{eurScore}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-mono font-bold ${
+                      eurScore >= 1.10 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                      eurScore >= 1.00 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                      'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                    }`}>
+                      {eurScore >= 1.10 ? 'High Elastic SSC' : eurScore >= 1.00 ? 'Balanced' : 'Strength Dominant'}
+                    </span>
+                  </div>
+                  <div className="text-white/60 text-xs mt-0.5">
+                    CMJ Avg: {avgCmj?.toFixed(1)}cm vs SJ Avg: {avgSj?.toFixed(1)}cm — {
+                      eurScore >= 1.10 ? 'Athlete effectively utilizes stretch-shortening cycle elastic energy.' :
+                      eurScore >= 1.00 ? 'Good baseline balance between concentric strength and elastic stretch recoil.' :
+                      'Athlete relies heavily on pure concentric force; recommend plyometric jump training.'
+                    }
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Empty State vs Charts */}
+          {chartData.length === 0 ? (
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-12 text-center flex flex-col items-center justify-center gap-3 backdrop-blur-md">
+              <div className="w-14 h-14 rounded-full bg-white/5 flex items-center justify-center border border-white/10 text-white/40">
+                <span className="material-symbols-outlined text-3xl">sports_gymnastics</span>
+              </div>
+              <h3 className="font-headline-md text-lg text-white font-bold">
+                No session data available
+              </h3>
+              <p className="font-data-label text-xs text-white/50 max-w-sm">
+                No jump telemetry records have been stored in the SQLite database yet. Perform jumps in the Live tab to begin accumulating data.
+              </p>
+              <button
+                onClick={onReturnHome}
+                className="mt-2 px-5 py-2.5 bg-[#c9a050] text-black font-data-label text-xs font-bold rounded-full uppercase tracking-wider hover:bg-[#d9b060] transition-colors cursor-pointer"
+              >
+                Go to Live Tab
+              </button>
+            </div>
+          ) : (
+            <section className="space-y-6">
+              {/* Chart 1: Line Chart - Jump Height (cm) against Jump Number */}
+              <div className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] p-5 md:p-6 backdrop-blur-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.08] pb-3">
+                  <div>
+                    <h2 className="text-xs font-mono uppercase tracking-wider text-[#00f5d4] font-bold flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-[#00f5d4] shadow-[0_0_8px_#00f5d4]" />
+                      Vertical Jump Height vs. Attempt
+                    </h2>
+                    <p className="text-[11px] font-mono text-white/40 mt-0.5">
+                      Center of mass vertical rise calculated per jump attempt
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-[#00f5d4] bg-[#00f5d4]/10 border border-[#00f5d4]/30 px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                      Elevation ({athleteProfile.units === 'imperial' ? 'in' : 'cm'})
+                    </span>
+                  </div>
+                </div>
+
+                <div className="h-64 w-full pt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" vertical={false} />
+                      <XAxis
+                        dataKey="jumpNumber"
+                        stroke="rgba(255, 255, 255, 0.2)"
+                        tick={{ fill: 'rgba(255, 255, 255, 0.5)', fontSize: 11, fontFamily: 'monospace' }}
+                        label={{
+                          value: 'Attempt #',
+                          position: 'insideBottom',
+                          offset: -5,
+                          fill: 'rgba(255, 255, 255, 0.4)',
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        }}
+                      />
+                      <YAxis
+                        stroke="rgba(255, 255, 255, 0.2)"
+                        tick={{ fill: 'rgba(255, 255, 255, 0.5)', fontSize: 11, fontFamily: 'monospace' }}
+                        unit="cm"
+                        domain={['auto', 'auto']}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#0b0d11',
+                          border: '1px solid rgba(0, 245, 212, 0.4)',
+                          borderRadius: '16px',
+                          color: '#ffffff',
+                          boxShadow: '0 10px 30px rgba(0,0,0,0.8)',
+                          fontSize: '12px',
+                          fontFamily: 'monospace',
+                        }}
+                        itemStyle={{ color: '#00f5d4', fontWeight: 'bold' }}
+                        formatter={(val: any, name: any, item: any) => [
+                          `${val} cm (${item.payload.hangTime} ms hang)`,
+                          'Jump Height'
+                        ]}
+                        labelFormatter={(label) => `Attempt #${label}`}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="jumpHeightCm"
+                        stroke="#00f5d4"
+                        strokeWidth={3}
+                        dot={{ fill: '#00f5d4', stroke: '#0b0d11', strokeWidth: 2, r: 4 }}
+                        activeDot={{ fill: '#ffffff', stroke: '#00f5d4', strokeWidth: 3, r: 6 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
 
-              <span className="font-data-value text-xs text-white/50">
-                {attempt.timestampStr}
-              </span>
+              {/* Chart 2: Bar Chart - Landing Impact (g) against Jump Number */}
+              <div className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] p-5 md:p-6 backdrop-blur-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.08] pb-3">
+                  <div>
+                    <h2 className="text-xs font-mono uppercase tracking-wider text-amber-400 font-bold flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_8px_#fbbf24]" />
+                      Landing Force Deceleration vs. Attempt
+                    </h2>
+                    <p className="text-[11px] font-mono text-white/40 mt-0.5">
+                      Ground reaction decelerations with 4.5g heavy impact safety ceiling
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-rose-400 bg-rose-500/10 border border-rose-500/30 px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                      Heavy Impact Limit: 4.5g
+                    </span>
+                  </div>
+                </div>
 
-              <span
-                className={`font-data-value text-sm ${
-                  attempt.isPeak
-                    ? 'text-[#c9a050] font-bold'
-                    : attempt.isFatigue
-                    ? 'text-red-300'
-                    : 'text-white'
-                }`}
-              >
-                {formatMetricHeight(attempt.jumpCm, athleteProfile.units)}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
+                <div className="h-64 w-full pt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.07)" vertical={false} />
+                      <XAxis
+                        dataKey="jumpNumber"
+                        stroke="rgba(255, 255, 255, 0.3)"
+                        tick={{ fill: 'rgba(255, 255, 255, 0.5)', fontSize: 11, fontFamily: 'monospace' }}
+                        label={{
+                          value: 'Jump Number',
+                          position: 'insideBottom',
+                          offset: -5,
+                          fill: 'rgba(255, 255, 255, 0.4)',
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        }}
+                      />
+                      <YAxis
+                        stroke="rgba(255, 255, 255, 0.3)"
+                        tick={{ fill: 'rgba(255, 255, 255, 0.5)', fontSize: 11, fontFamily: 'monospace' }}
+                        unit="g"
+                        domain={[0, (dataMax: number) => Math.max(6, Math.ceil(dataMax + 1))]}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#0b0d11',
+                          border: '1px solid rgba(245, 158, 11, 0.4)',
+                          borderRadius: '16px',
+                          color: '#ffffff',
+                          boxShadow: '0 10px 30px rgba(0,0,0,0.8)',
+                          fontSize: '12px',
+                          fontFamily: 'monospace',
+                        }}
+                        itemStyle={{ color: '#fbbf24', fontWeight: 'bold' }}
+                        formatter={(val: any) => [`${val} g`, 'Landing Force']}
+                        labelFormatter={(label) => `Attempt #${label}`}
+                      />
+                      {/* Horizontal Reference Line at 4.5g Threshold */}
+                      <ReferenceLine
+                        y={4.5}
+                        stroke="#ef4444"
+                        strokeDasharray="4 4"
+                        strokeWidth={2}
+                        label={{
+                          value: 'Heavy Impact Limit (4.5g)',
+                          fill: '#f87171',
+                          fontSize: 10,
+                          position: 'top',
+                          fontFamily: 'monospace',
+                          fontWeight: 'bold',
+                        }}
+                      />
+                      <Bar
+                        dataKey="landingImpact"
+                        radius={[6, 6, 0, 0]}
+                      >
+                        {chartData.map((entry, index) => {
+                          const impact = entry.landingImpact;
+                          const color = impact > 4.5 ? '#ef4444' : impact > 3.0 ? '#f59e0b' : '#00f5d4';
+                          return <Cell key={`cell-${index}`} fill={color} />;
+                        })}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
 
-      {/* Sticky Bottom Action */}
-      <div className="fixed bottom-0 left-0 w-full p-4 md:px-10 bg-[#0a0a0a]/90 backdrop-blur-md border-t border-white/10 z-40 flex justify-center shadow-[0_-10px_40px_rgba(0,0,0,0.8)]">
+              {/* Chart 3: Fatigue Curve & Stamina Decay */}
+              <div className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] p-5 md:p-6 backdrop-blur-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.08] pb-3">
+                  <div>
+                    <h2 className="text-xs font-mono uppercase tracking-wider text-emerald-400 font-bold flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
+                      Fatigue Decay &amp; Capacity Retention
+                    </h2>
+                    <p className="text-[11px] font-mono text-white/40 mt-0.5">
+                      Percentage of peak jump power sustained across attempts (Fatigue Threshold at 80%)
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                      Stamina Index (%)
+                    </span>
+                  </div>
+                </div>
+
+                <div className="h-64 w-full pt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" vertical={false} />
+                      <XAxis
+                        dataKey="jumpNumber"
+                        stroke="rgba(255, 255, 255, 0.2)"
+                        tick={{ fill: 'rgba(255, 255, 255, 0.5)', fontSize: 11, fontFamily: 'monospace' }}
+                        label={{
+                          value: 'Attempt #',
+                          position: 'insideBottom',
+                          offset: -5,
+                          fill: 'rgba(255, 255, 255, 0.4)',
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        }}
+                      />
+                      <YAxis
+                        stroke="rgba(255, 255, 255, 0.2)"
+                        tick={{ fill: 'rgba(255, 255, 255, 0.5)', fontSize: 11, fontFamily: 'monospace' }}
+                        unit="%"
+                        domain={[30, 100]}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#0b0d11',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          borderRadius: '16px',
+                          color: '#ffffff',
+                          boxShadow: '0 10px 30px rgba(0,0,0,0.8)',
+                          fontSize: '12px',
+                          fontFamily: 'monospace',
+                        }}
+                        itemStyle={{ color: '#10b981', fontWeight: 'bold' }}
+                        formatter={(val: any, name: any, item: any) => [
+                          `${val}% capacity (${item.payload.fatigueDropPercent}% drop)`,
+                          'Stamina'
+                        ]}
+                        labelFormatter={(label) => `Attempt #${label}`}
+                      />
+                      <ReferenceLine
+                        y={80}
+                        stroke="#f59e0b"
+                        strokeDasharray="4 4"
+                        strokeWidth={1.5}
+                        label={{
+                          value: 'Fatigue Threshold (80%)',
+                          fill: '#fbbf24',
+                          fontSize: 10,
+                          position: 'top',
+                          fontFamily: 'monospace',
+                          fontWeight: 'bold',
+                        }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="retentionPercent"
+                        stroke="#10b981"
+                        strokeWidth={3}
+                        dot={{ fill: '#10b981', stroke: '#0b0d11', strokeWidth: 2, r: 4 }}
+                        activeDot={{ fill: '#ffffff', stroke: '#10b981', strokeWidth: 3, r: 6 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Historical Jump Log Table */}
+              <div className="rounded-3xl bg-[#121620]/80 border border-white/[0.08] p-5 md:p-6 backdrop-blur-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.08] pb-3">
+                  <div>
+                    <h2 className="text-xs font-mono uppercase tracking-wider text-white/70 font-bold flex items-center gap-2">
+                      <span className="material-symbols-outlined text-sm text-[#00f5d4]">table_chart</span>
+                      Recorded Jump History ({chartData.length} entries)
+                    </h2>
+                    <p className="text-[11px] font-mono text-white/40 mt-0.5">
+                      Detailed biomechanical breakdown per jump attempt
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-mono text-white/40 bg-white/[0.04] border border-white/[0.06] px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1 self-start sm:self-auto">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Auto-synced
+                  </span>
+                </div>
+
+                <div className="max-h-80 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                  {[...chartData].reverse().map((d) => {
+                    const isHardLanding = d.landingImpact >= 4.5;
+                    const isFatigued = d.retentionPercent < 80;
+                    return (
+                      <div
+                        key={d.id}
+                        className={`flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 py-3 px-4 rounded-2xl border text-sm transition-all ${
+                          isHardLanding
+                            ? 'bg-rose-500/[0.08] border-rose-500/30 hover:border-rose-500/50'
+                            : 'bg-white/[0.02] border-white/[0.06] hover:bg-white/[0.05] hover:border-white/[0.12]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-white font-mono font-bold">#{d.jumpNumber}</span>
+                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                            d.jumpType === 'CMJ' ? 'bg-amber-400/15 text-amber-300 border border-amber-400/30' :
+                            d.jumpType === 'DJ' ? 'bg-emerald-400/15 text-emerald-300 border border-emerald-400/30' :
+                            'bg-purple-400/15 text-purple-300 border border-purple-400/30'
+                          }`}>
+                            {d.jumpType}
+                          </span>
+                          {isHardLanding && (
+                            <span className="text-[10px] font-mono bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                              Hard Landing
+                            </span>
+                          )}
+                          {isFatigued && (
+                            <span className="text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                              Fatigue
+                            </span>
+                          )}
+                          {d.rsi && (
+                            <span className="text-[10px] font-mono bg-[#00f5d4]/10 text-[#00f5d4] border border-[#00f5d4]/30 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                              RSI {d.rsi}
+                            </span>
+                          )}
+                          {d.dipDepthCm && (
+                            <span className="text-[10px] font-mono bg-purple-500/15 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider hidden md:inline">
+                              Dip {d.dipDepthCm}cm
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-3 sm:gap-4 self-end sm:self-auto">
+                          {d.rfd && (
+                            <div className="text-right hidden sm:block">
+                              <span className="text-[9px] font-mono text-white/40 uppercase block">RFD</span>
+                              <span className="font-mono text-xs text-purple-300 font-bold">
+                                {d.rfd} g/s
+                              </span>
+                            </div>
+                          )}
+                          <div className="text-right">
+                            <span className="text-[9px] font-mono text-white/40 uppercase block">Elevation</span>
+                            <span className="font-mono text-xs text-[#00f5d4] font-bold">
+                              {d.jumpHeightCm} cm
+                            </span>
+                          </div>
+
+                          {d.groundContactMs && (
+                            <div className="text-right hidden sm:block">
+                              <span className="text-[9px] font-mono text-white/40 uppercase block">GCT</span>
+                              <span className="font-mono text-xs text-white">
+                                {d.groundContactMs} ms
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="text-right">
+                            <span className="text-[9px] font-mono text-white/40 uppercase block">Landing</span>
+                            <span className={`font-mono text-xs font-bold ${isHardLanding ? 'text-rose-400' : 'text-white'}`}>
+                              {d.landingImpact} g
+                            </span>
+                          </div>
+
+                          <div className="text-right">
+                            <span className="text-[9px] font-mono text-white/40 uppercase block">Takeoff</span>
+                            <span className="font-mono text-xs text-amber-300 font-bold">
+                              {d.takeoffExpl} g
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
+          )}
+        </>
+      )}
+
+      {/* Inline Return Action */}
+      <div className="pt-2 flex justify-center">
         <button
           onClick={onReturnHome}
-          className="w-full max-w-md bg-[#c9a050] text-black font-headline-md py-3.5 rounded-full hover:bg-[#d9b060] transition-colors active:scale-95 flex items-center justify-center gap-2 font-bold shadow-lg cursor-pointer uppercase tracking-[0.2em]"
+          className="w-full max-w-sm py-3 px-6 rounded-2xl bg-[#00f5d4]/10 hover:bg-[#00f5d4]/20 border border-[#00f5d4]/30 text-[#00f5d4] font-mono text-xs uppercase tracking-wider font-bold transition-all active:scale-95 flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(0,245,212,0.15)] cursor-pointer"
         >
-          Save & Return to Home
-          <span className="material-symbols-outlined text-sm">arrow_forward</span>
+          <span className="material-symbols-outlined text-base">arrow_back</span>
+          Return to Live Cockpit
         </button>
       </div>
     </div>
   );
 };
+

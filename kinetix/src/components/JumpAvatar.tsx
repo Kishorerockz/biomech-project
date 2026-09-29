@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Environment, ContactShadows, PresentationControls } from '@react-three/drei';
+import { ContactShadows, PresentationControls } from '@react-three/drei';
 import * as THREE from 'three';
 
 interface JumpAvatarProps {
@@ -25,39 +25,49 @@ function AvatarModel({ gyro, accel, connected, orientation }: JumpAvatarProps) {
 
     if (connected) {
       if (orientation) {
-        // Use true server-side sensor fusion
+        // Use true server-side sensor fusion if provided
         const targetQ = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
-        currentQ.current.slerp(targetQ, 0.4);
+        currentQ.current.slerp(targetQ, 0.35);
       } else {
-        // Fallback: Euler integration when backend PB does not supply orientation
-        const gx = gyro.x * (Math.PI / 180);
-        const gy = gyro.y * (Math.PI / 180);
-        const gz = gyro.z * (Math.PI / 180);
+        // Fallback: Complementary tilt & rate integration
+        // Clamp dt to prevent massive jump if frame paused
+        const safeDt = Math.min(0.05, Math.max(0.001, dt));
 
-      const deltaQ = new THREE.Quaternion();
-      const length = Math.sqrt(gx * gx + gy * gy + gz * gz);
-      if (length > 0) {
-        deltaQ.setFromAxisAngle(new THREE.Vector3(gx / length, gy / length, gz / length), length * dt);
-        currentQ.current.multiply(deltaQ);
+        // Gyro rates (deg/s -> rad/s)
+        const gx = (Number(gyro.x) || 0) * (Math.PI / 180);
+        const gy = (Number(gyro.y) || 0) * (Math.PI / 180);
+        const gz = (Number(gyro.z) || 0) * (Math.PI / 180);
+
+        const rateLength = Math.sqrt(gx * gx + gy * gy + gz * gz);
+        // Only integrate gyro if above sensor noise threshold (> 2 deg/s)
+        if (rateLength > 0.035) {
+          const deltaQ = new THREE.Quaternion();
+          deltaQ.setFromAxisAngle(new THREE.Vector3(gx / rateLength, gy / rateLength, gz / rateLength), rateLength * safeDt);
+          currentQ.current.multiply(deltaQ);
+        }
+
+        // Accelerometer gravity vector alignment (Pitch & Roll reference)
+        const ax = Number(accel.x) || 0;
+        const ay = Number(accel.y) || 0;
+        const az = Number(accel.z) || 1.0;
+        const accelMag = Math.sqrt(ax * ax + ay * ay + az * az);
+
+        // When not in high-g dynamic movement (0.7g - 1.3g), correct tilt towards gravity
+        if (accelMag >= 0.7 && accelMag <= 1.3) {
+          // In MPU-6050 standard frame: Z is normal, Y is axial, X is lateral
+          const measuredDown = new THREE.Vector3(ax, ay, az).normalize();
+          const targetDown = new THREE.Vector3(0, 0, 1); // standard upright reference
+          const qGravity = new THREE.Quaternion().setFromUnitVectors(measuredDown, targetDown);
+          currentQ.current.slerp(qGravity, 0.06);
+        }
       }
-      
-      // Simplistic complementary filter against acceleration (gravity)
-      const accelMagnitude = Math.sqrt(accel.x * accel.x + accel.y * accel.y + accel.z * accel.z);
-      // Ensure we're roughly stationary to trust the accelerometer for tilt
-      if (Math.abs(accelMagnitude - 1.0) < 0.2) { 
-        const accelVec = new THREE.Vector3(-accel.x, -accel.y, accel.z).normalize();
-        const upVec = new THREE.Vector3(0, 1, 0); 
-        const qCorr = new THREE.Quaternion().setFromUnitVectors(accelVec, upVec);
-        currentQ.current.slerp(qCorr, 0.02); 
-      }
-    }
-  } else {
-    // Gently return to idle state when disconnected
+    } else {
+      // Gently return to upright rest pose when disconnected
       currentQ.current.slerp(new THREE.Quaternion(), 0.05);
     }
     
     currentQ.current.normalize();
-    meshRef.current.quaternion.slerp(currentQ.current, 0.3);
+    meshRef.current.quaternion.slerp(currentQ.current, 0.35);
   });
 
   return (
@@ -77,9 +87,10 @@ export const JumpAvatar: React.FC<JumpAvatarProps> = (props) => {
   return (
     <div className="w-full h-full border border-white/10 rounded-xl overflow-hidden bg-[#131313] relative flex items-center justify-center touch-none">
       <Canvas camera={{ position: [0, 1.5, 4], fov: 45 }}>
-        <ambientLight intensity={0.5} />
-        <directionalLight position={[10, 10, 5]} intensity={1} color="#ffffff" />
-        <directionalLight position={[-10, 10, -5]} intensity={0.5} color="#c9a050" />
+        <ambientLight intensity={0.7} />
+        <directionalLight position={[10, 10, 5]} intensity={1.2} color="#ffffff" />
+        <directionalLight position={[-10, 10, -5]} intensity={0.8} color="#c9a050" />
+        <pointLight position={[0, -2, 2]} intensity={0.5} color="#00fbfb" />
         
         <PresentationControls global rotation={[0, 0, 0]} polar={[-Math.PI / 2, Math.PI / 2]} azimuth={[-Infinity, Infinity]}>
           <group position={[0, -0.5, 0]}>
@@ -87,8 +98,6 @@ export const JumpAvatar: React.FC<JumpAvatarProps> = (props) => {
             <ContactShadows position={[0, -1.2, 0]} opacity={0.6} scale={10} blur={2.5} far={4} color="#000000" />
           </group>
         </PresentationControls>
-        
-        <Environment preset="city" />
       </Canvas>
       <div className="absolute top-4 left-4 font-data-label text-[10px] uppercase tracking-widest font-bold bg-[#0a0a0a]/80 px-2 py-1 rounded border border-white/5 backdrop-blur shadow select-none">
         {props.connected ? (
