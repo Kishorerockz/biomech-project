@@ -297,61 +297,129 @@ export default function App() {
     }));
   };
 
-  // 1. Socket.io (Backend telemetry & event stream)
+  // 1. Hardware Direct Wi-Fi WebSocket (Connects directly to ESP32 AP on port 8080)
+  const activeWsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: NodeJS.Timeout | null = null;
+    let isUnmounted = false;
+
+    const connectWebSocket = () => {
+      if (isUnmounted) return;
+      if (connectionModeRef.current === 'ble') return;
+
+      const wsUrl = getWsUrl(connectionConfigRef.current);
+
+      try {
+        console.log('[Kinetix-ESP32-WS] Connecting to hardware at:', wsUrl);
+        ws = new WebSocket(wsUrl);
+        activeWsRef.current = ws;
+
+        ws.onopen = () => {
+          console.log('[Kinetix-ESP32-WS] Connected successfully to:', wsUrl);
+          if (isUnmounted) return;
+          if (connectionModeRef.current === 'ble') {
+            ws?.close();
+            return;
+          }
+          setConnectionMode('wifi');
+          connectionModeRef.current = 'wifi';
+          setSensorState((prev) => ({
+            ...prev,
+            connected: true,
+            connectionMode: 'wifi',
+            reconnecting: false,
+            deviceName: 'Kinetix ESP32 (Wi-Fi)',
+            ipAddress: connectionConfigRef.current.wsHost || '192.168.4.1',
+          }));
+        };
+
+        ws.onclose = () => {
+          if (isUnmounted || connectionModeRef.current === 'ble') return;
+          setSensorState((prev) => {
+            if (activeSocketRef.current?.connected) return prev;
+            return {
+              ...prev,
+              connected: false,
+              connectionMode: 'disconnected',
+              reconnecting: true,
+            };
+          });
+          reconnectTimeout = setTimeout(connectWebSocket, 3000);
+        };
+
+        ws.onerror = () => {
+          // Hardware WS silent fallback
+        };
+
+        ws.onmessage = (event) => {
+          if (connectionModeRef.current === 'ble') return;
+          try {
+            const data = JSON.parse(event.data);
+            processIncomingRawData(data, 'wifi');
+          } catch (e) {
+            console.error('[Kinetix-ESP32-WS] Telemetry parse error:', e);
+          }
+        };
+      } catch {
+        reconnectTimeout = setTimeout(connectWebSocket, 3000);
+      }
+    };
+
+    connectWebSocket();
+
+    return () => {
+      isUnmounted = true;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (ws) ws.close();
+    };
+  }, [wsReconnectKey]);
+
+  // 2. Backend Socket.io (Optional backend relay / simulator stream)
   const activeSocketRef = useRef<any>(null);
   const handleRecordJumpRef = useRef<(jumpCm: number) => void>(() => {});
 
   useEffect(() => {
-    // Do not open Socket.io if user has explicitly connected BLE
     if (connectionModeRef.current === 'ble') return;
 
     const backendUrl = getBackendUrl(connectionConfigRef.current);
-    console.log('[Kinetix-SocketIO] Connecting to:', backendUrl);
 
     const socket = io(backendUrl, {
       reconnection: true,
       transports: ['websocket', 'polling'],
+      timeout: 3000,
     });
     activeSocketRef.current = socket;
 
     socket.on('connect', () => {
-      console.log('[Kinetix-SocketIO] Connected successfully to:', backendUrl);
-      if (connectionModeRef.current === 'ble') {
-        socket.disconnect();
-        return;
-      }
-      setConnectionMode('wifi');
-      connectionModeRef.current = 'wifi';
+      console.log('[Kinetix-SocketIO] Connected to backend:', backendUrl);
       setSensorState((prev) => ({
         ...prev,
         connected: true,
-        connectionMode: 'wifi',
-        reconnecting: false,
-        deviceName: 'Biomech Server',
-        ipAddress: connectionConfigRef.current.wsHost || 'localhost',
+        connectionMode: prev.connectionMode === 'disconnected' ? 'wifi' : prev.connectionMode,
+        deviceName: prev.deviceName || 'Biomech Server',
       }));
     });
 
-    socket.on('disconnect', (reason) => {
-      console.log('[Kinetix-SocketIO] Disconnected. Reason:', reason);
-      if (connectionModeRef.current === 'ble') return;
-
-      setConnectionMode('disconnected');
-      connectionModeRef.current = 'disconnected';
-      setSensorState((prev) => ({
-        ...prev,
-        connected: false,
-        connectionMode: 'disconnected',
-        reconnecting: true,
-      }));
+    socket.on('disconnect', () => {
+      // Disconnect from Socket.io doesn't drop sensor if hardware WS is open
+      setSensorState((prev) => {
+        if (activeWsRef.current?.readyState === WebSocket.OPEN) return prev;
+        return {
+          ...prev,
+          connected: false,
+          connectionMode: 'disconnected',
+          reconnecting: true,
+        };
+      });
     });
 
     socket.on('dashboard_update', (data: any) => {
-      if (connectionModeRef.current === 'ble') return; // Reject Wi-Fi while BLE is active
+      if (connectionModeRef.current === 'ble') return;
+      // If hardware WS is actively streaming, don't overwrite with backend
+      if (activeWsRef.current?.readyState === WebSocket.OPEN) return;
 
-      // data.accel, data.gyro are ALREADY in physical units (g, deg/s) — no LSB conversion needed
-      // data.processedAccel is the backend's filtered magnitude
-      // data.orientation is the quaternion for 3D skeleton
       setConnectionMode('wifi');
       connectionModeRef.current = 'wifi';
       setSensorState((prev) => ({
@@ -366,9 +434,9 @@ export default function App() {
       }));
     });
 
-    // Authoritative jump detection from backend
+    // Authoritative jump detection from backend if present
     socket.on('jump_detected', (data: any) => {
-      console.log('[Kinetix-SocketIO] Authoritative jump_detected event received:', data);
+      console.log('[Kinetix-SocketIO] Jump detected event received from backend:', data);
       const height = typeof data.heightCm === 'number' ? data.heightCm : 0;
       setSensorState((prev) => {
         const isPeak = height > prev.maxJumpCm;
@@ -397,11 +465,10 @@ export default function App() {
     return () => {
       socket.disconnect();
     };
-  }, [wsReconnectKey]); // Re-run when user updates server config
+  }, [wsReconnectKey]);
 
-  // 2. Web Bluetooth (Manual user trigger)
+  // 3. Web Bluetooth (Manual user trigger)
   const handlePairBLE = async () => {
-    // If active in BLE already, allow disconnecting
     if (connectionModeRef.current === 'ble') {
       await bleHardware.disconnect();
       setConnectionMode('disconnected');
@@ -420,7 +487,9 @@ export default function App() {
       },
       (status) => {
         if (status.connected) {
-          // Close active Wi-Fi Socket so it doesn't fight over the UI
+          if (activeWsRef.current && activeWsRef.current.readyState === WebSocket.OPEN) {
+            activeWsRef.current.close();
+          }
           if (activeSocketRef.current && activeSocketRef.current.connected) {
             activeSocketRef.current.disconnect();
           }

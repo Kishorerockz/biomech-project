@@ -44,7 +44,7 @@ export const LiveTab: React.FC<LiveTabProps> = ({
   const latestAccelRef = useRef<number>(sensorState.procAccelG || 1.0);
   const maxJumpCmRef = useRef<number>(0);
 
-  // Jump Detection Engine (Demoted in WiFi/Socket.io mode; secondary metrics & standalone BLE fallback)
+  // Jump Detection Engine
   const jumpMetrics = useJumpDetection(
     sensorState.procAccelG || 1.0,
     isSessionActive,
@@ -53,38 +53,23 @@ export const LiveTab: React.FC<LiveTabProps> = ({
       const flightHeightCm = 122.625 * flightTimeSec * flightTimeSec;
       const calculatedHeightCm = parseFloat(Math.min(120.0, flightHeightCm).toFixed(1));
 
-      // Always update secondary metrics (RSI, GCT)
-      setSensorState((prev) => {
-        // If in direct BLE mode without backend, fallback to local height calculation
-        if (prev.connectionMode === 'ble') {
-          const isPeak = calculatedHeightCm > maxJumpCmRef.current;
-          if (isPeak) maxJumpCmRef.current = calculatedHeightCm;
-          return {
-            ...prev,
-            lastJumpCm: calculatedHeightCm,
-            maxJumpCm: isPeak ? calculatedHeightCm : prev.maxJumpCm,
-            totalJumps: metrics.totalJumps,
-            hangTimeMs: metrics.hangTimeMs,
-            landingImpactG: metrics.landingImpactG,
-            takeoffAccelG: metrics.takeoffAccelG,
-            groundContactTimeMs: metrics.groundContactTimeMs,
-            rsi: metrics.rsi,
-            isNewPeak: isPeak,
-          };
-        }
-        // In WiFi / Socket.io mode, backend jump_detected is authoritative!
-        // Only update client-derived secondary metrics (RSI, groundContactTimeMs)
-        return {
-          ...prev,
-          groundContactTimeMs: metrics.groundContactTimeMs ?? prev.groundContactTimeMs,
-          rsi: metrics.rsi ?? prev.rsi,
-        };
-      });
+      const isPeak = calculatedHeightCm > maxJumpCmRef.current;
+      if (isPeak) maxJumpCmRef.current = calculatedHeightCm;
 
-      // In standalone BLE mode, record jump locally
-      if (sensorState.connectionMode === 'ble') {
-        onRecordJump(calculatedHeightCm);
-      }
+      setSensorState((prev) => ({
+        ...prev,
+        lastJumpCm: calculatedHeightCm,
+        maxJumpCm: isPeak ? calculatedHeightCm : prev.maxJumpCm,
+        totalJumps: (prev.totalJumps || 0) + 1,
+        hangTimeMs: metrics.hangTimeMs,
+        landingImpactG: metrics.landingImpactG,
+        takeoffAccelG: metrics.takeoffAccelG,
+        groundContactTimeMs: metrics.groundContactTimeMs,
+        rsi: metrics.rsi,
+        isNewPeak: isPeak,
+      }));
+
+      onRecordJump(calculatedHeightCm);
     },
     sensorState.hardwareTimestampUs,
     athleteProfile.wearLocation || 'waist',
