@@ -75,7 +75,10 @@ export interface SensorState {
   twistDeg?: number;
   orientation?: { x: number; y: number; z: number; w: number };
   streamHz?: number;
+  /** Live jump phase from the imperative JumpDetector (bypasses React batching) */
+  jumpPhase?: 'GROUNDED' | 'TAKEOFF' | 'FREEFALL' | 'LANDING';
 }
+
 
 export interface HistoryResponse {
   sessions: any[]; // The raw JSON before mapping

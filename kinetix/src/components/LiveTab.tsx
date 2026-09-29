@@ -44,11 +44,14 @@ export const LiveTab: React.FC<LiveTabProps> = ({
   const latestAccelRef = useRef<number>(sensorState.procAccelG || 1.0);
   const maxJumpCmRef = useRef<number>(0);
 
-  // Jump Detection Engine
+  // Jump Detection Engine (hook kept for BLE compatibility; callback disabled for
+  // hardware connections since the imperative JumpDetector in App.tsx handles those)
   const jumpMetrics = useJumpDetection(
     sensorState.procAccelG || 1.0,
     isSessionActive,
-    (metrics) => {
+    // Only use hook callback if sensor is NOT connected (demo/sim mode).
+    // For real hardware (wifi/ble), App.tsx's imperative JumpDetector fires first.
+    sensorState.connected ? undefined : (metrics) => {
       const flightTimeSec = metrics.hangTimeMs / 1000;
       const flightHeightCm = 122.625 * flightTimeSec * flightTimeSec;
       const calculatedHeightCm = parseFloat(Math.min(120.0, flightHeightCm).toFixed(1));
@@ -75,6 +78,13 @@ export const LiveTab: React.FC<LiveTabProps> = ({
     athleteProfile.wearLocation || 'waist',
     athleteProfile.jumpThresholdG
   );
+
+  // Map imperative detector phase (from sensorState) to UI phase names
+  const livePhase: string = (
+    sensorState.jumpPhase === 'FREEFALL' ? 'AIRBORNE'
+    : sensorState.jumpPhase === 'GROUNDED' ? 'STANDING'
+    : sensorState.jumpPhase
+  ) || jumpMetrics.jumpState || 'READY';
 
   // Authoritative Audio & Haptic Feedback (Triggers on backend or BLE authoritative jumps)
   const prevJumpCmRef = useRef<number>(sensorState.lastJumpCm);
@@ -340,31 +350,31 @@ export const LiveTab: React.FC<LiveTabProps> = ({
           <div className="mt-5 flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-mono tracking-wider uppercase transition-all duration-200 bg-white/[0.04] border-white/10">
             <span
               className={`w-2 h-2 rounded-full ${
-                jumpMetrics.jumpState === 'AIRBORNE'
+                livePhase === 'AIRBORNE'
                   ? 'bg-[#00f5d4] animate-ping'
-                  : jumpMetrics.jumpState === 'TAKEOFF'
+                  : livePhase === 'TAKEOFF'
                   ? 'bg-purple-400 animate-pulse'
-                  : jumpMetrics.jumpState === 'DIP'
+                  : livePhase === 'DIP'
                   ? 'bg-amber-400'
-                  : jumpMetrics.jumpState === 'LANDING'
+                  : livePhase === 'LANDING'
                   ? 'bg-emerald-400'
                   : 'bg-white/40'
               }`}
             />
             <span
               className={
-                jumpMetrics.jumpState === 'AIRBORNE'
+                livePhase === 'AIRBORNE'
                   ? 'text-[#00f5d4] font-bold'
-                  : jumpMetrics.jumpState === 'TAKEOFF'
+                  : livePhase === 'TAKEOFF'
                   ? 'text-purple-300 font-semibold'
-                  : jumpMetrics.jumpState === 'DIP'
+                  : livePhase === 'DIP'
                   ? 'text-amber-300'
-                  : jumpMetrics.jumpState === 'LANDING'
+                  : livePhase === 'LANDING'
                   ? 'text-emerald-300 font-semibold'
                   : 'text-white/60'
               }
             >
-              Phase: {jumpMetrics.jumpState || 'READY'}
+              Phase: {livePhase}
             </span>
           </div>
         </div>

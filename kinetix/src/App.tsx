@@ -21,6 +21,7 @@ import { bleHardware, RawTelemetrySample } from './utils/bluetooth';
 import { convertToGForce } from './utils/sensorMath';
 import { getWsUrl, getApiBaseUrl, getBackendUrl, getConnectionConfig, saveConnectionConfig, ConnectionConfig } from './utils/connectionConfig';
 import { ConnectionModal } from './components/ConnectionModal';
+import { JumpDetector, DetectedJump } from './utils/JumpDetector';
 
 // Dummy fetch function for API backwards compatibility, ideally move to /utils/api
 async function fetchSessionHistory(activeAthleteId: string) {
@@ -240,6 +241,34 @@ export default function App() {
   // Listener callback for intercepting live raw samples during calibration
   const rawSampleListenerRef = useRef<((raw: { x: number; y: number; z: number }) => void) | null>(null);
 
+  // ── Imperative Jump Detector ─────────────────────────────────────────────
+  // Lives in a ref so it persists across renders and is NEVER affected by
+  // React batching. processPacket() is called synchronously on every single
+  // incoming WebSocket/BLE packet before React state is ever touched.
+  const maxJumpCmImperativeRef = useRef<number>(0);
+  const jumpDetectorRef = useRef<JumpDetector>(
+    new JumpDetector(
+      // onJumpDetected — fires the moment landing is confirmed
+      (_jump: DetectedJump) => { /* filled below after setSensorState is in scope */ },
+      // onPhaseChange — updates phase pill in LiveTab
+      (_phase) => { /* filled below */ },
+    )
+  );
+
+  // We need setSensorState & handleRecordJumpRef in the callbacks, but those are
+  // declared later. Solve with stable wrapper functions stored in refs.
+  const onJumpDetectedRef = useRef<(jump: DetectedJump) => void>(() => {});
+  const onPhaseChangeRef = useRef<(phase: string) => void>(() => {});
+
+  // Re-create the detector with live callbacks once, after mount
+  useEffect(() => {
+    jumpDetectorRef.current = new JumpDetector(
+      (jump: DetectedJump) => onJumpDetectedRef.current(jump),
+      (phase) => onPhaseChangeRef.current(phase),
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Shared Data Ingestion: Processes raw JSON telemetry from either WebSocket or BLE
   const processIncomingRawData = (data: RawTelemetrySample, source: 'wifi' | 'ble') => {
     if (data.x === -1) return; // Ignore drops
@@ -274,6 +303,10 @@ export default function App() {
     const accelZ = convertToGForce(correctedZ, rawRange);
     // Full-precision magnitude — no rounding! Rounding to 0.01g caused threshold jitter
     const magnitudeG = Math.sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+
+    // ── IMPERATIVE JUMP DETECTION (every packet, no React batching) ──────────
+    // This runs synchronously BEFORE setSensorState, so zero samples are skipped.
+    jumpDetectorRef.current.processPacket(magnitudeG);
 
     // Convert raw 16-bit gyro values to deg/s (MPU-6050 sensitivity for ±2000 deg/s is 16.4 LSB/(deg/s))
     const gyroScale = 16.4;
@@ -580,6 +613,33 @@ export default function App() {
   };
   handleRecordJumpRef.current = handleRecordJump;
 
+  // ── Wire imperative detector callbacks (need setSensorState in scope) ───────
+  onJumpDetectedRef.current = (jump: DetectedJump) => {
+    setSensorState((prev) => {
+      const isPeak = jump.heightCm > prev.maxJumpCm;
+      if (isPeak) maxJumpCmImperativeRef.current = jump.heightCm;
+      return {
+        ...prev,
+        lastJumpCm: jump.heightCm,
+        maxJumpCm: isPeak ? jump.heightCm : prev.maxJumpCm,
+        totalJumps: (prev.totalJumps || 0) + 1,
+        hangTimeMs: jump.hangTimeMs,
+        landingImpactG: jump.landingG,
+        takeoffAccelG: jump.takeoffG,
+        isNewPeak: isPeak,
+        jumpPhase: 'LANDING',
+      };
+    });
+    handleRecordJumpRef.current(jump.heightCm);
+  };
+
+  onPhaseChangeRef.current = (phase: string) => {
+    setSensorState((prev) => ({
+      ...prev,
+      jumpPhase: phase as SensorState['jumpPhase'],
+    }));
+  };
+
   const handleTriggerSessionStart = async () => {
     try {
       // Clear live metrics for the new session immediately
@@ -763,6 +823,9 @@ export default function App() {
       activeWsRef.current.send('tare');
       console.log('[Kinetix] Sent tare command via WebSocket');
     }
+    // Reset imperative detector so baseline re-initialises after new tare
+    jumpDetectorRef.current.reset();
+    maxJumpCmImperativeRef.current = 0;
   };
 
   const allTimePbCm = backendStats ? backendStats.personalBest : (Array.isArray(sessions) ? sessions.reduce((max: number, s: SessionData) => Math.max(max, s.peakJumpCm || 0), 0) : 0);
