@@ -15,7 +15,7 @@ const STORAGE_KEY = 'kinetix_connection_config';
 const DEFAULT_CONFIG: ConnectionConfig = {
   wsHost: '192.168.4.1',    // ESP32 AP fixed IP (always this when connected to Kinetix-WiFi)
   wsPort: 8080,
-  apiPort: 3001,
+  apiPort: 5000,
 };
 
 export function getConnectionConfig(): ConnectionConfig {
@@ -24,11 +24,12 @@ export function getConnectionConfig(): ConnectionConfig {
     if (saved) {
       const parsed = JSON.parse(saved);
       const host = typeof parsed.wsHost === 'string' && parsed.wsHost.trim() ? parsed.wsHost.trim() : DEFAULT_CONFIG.wsHost;
+      const apiPort = typeof parsed.apiPort === 'number' && parsed.apiPort > 0 ? (parsed.apiPort === 3001 ? 5000 : parsed.apiPort) : DEFAULT_CONFIG.apiPort;
       return {
         // If it was saved as 'localhost', override with default IP so Android connects to PC
         wsHost: host === 'localhost' ? DEFAULT_CONFIG.wsHost : host,
         wsPort: typeof parsed.wsPort === 'number' && parsed.wsPort > 0 ? parsed.wsPort : DEFAULT_CONFIG.wsPort,
-        apiPort: typeof parsed.apiPort === 'number' && parsed.apiPort > 0 ? parsed.apiPort : DEFAULT_CONFIG.apiPort,
+        apiPort,
       };
     }
   } catch {
@@ -46,10 +47,18 @@ export function getWsUrl(config?: ConnectionConfig): string {
   return `ws://${c.wsHost}:${c.wsPort}`;
 }
 
-export function getApiBaseUrl(config?: ConnectionConfig): string {
+export function getBackendUrl(config?: ConnectionConfig): string {
+  if (import.meta.env.VITE_BACKEND_URL) {
+    return import.meta.env.VITE_BACKEND_URL;
+  }
   const c = config ?? getConnectionConfig();
   if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-    return `http://localhost:${c.apiPort}`;
+    return `http://localhost:${c.apiPort || 5000}`;
   }
-  return `http://${c.wsHost}:${c.apiPort}`;
+  return `http://${c.wsHost}:${c.apiPort || 5000}`;
 }
+
+export function getApiBaseUrl(config?: ConnectionConfig): string {
+  return getBackendUrl(config);
+}
+

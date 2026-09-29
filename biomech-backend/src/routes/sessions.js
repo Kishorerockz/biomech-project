@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require("uuid");
 const mongoose = require("mongoose");
 const Session = require("../models/Session");
 const Telemetry = require("../models/Telemetry");
+const JumpEvent = require("../models/JumpEvent");
 
 const router = express.Router();
 
@@ -96,18 +97,32 @@ router.post("/:sessionId/end", async (req, res) => {
     const avgAccelerationG =
       telemetryDocs.length > 0 ? totalAccel / telemetryDocs.length : 0;
       
-    // Retrieve jumps from global state populated by server.js
-    const jumps = global.sessionJumps ? (global.sessionJumps[sessionId] || []) : [];
-    
+    // Fetch persisted JumpEvent documents for accurate attempts history with timestamps
+    let jumpEvents = [];
+    if (mongoose.connection.readyState === 1) {
+      jumpEvents = await JumpEvent.find({ sessionId }).sort({ timestamp: 1 }).lean();
+    }
+
+    // Read heights from persisted session.jumpHeights array or jumpEvents
+    const sessionJumpHeights = (session.jumpHeights && session.jumpHeights.length > 0)
+      ? session.jumpHeights
+      : jumpEvents.map(j => j.heightCm);
+
     let peakJumpCm = 0;
     let totalJumpCm = 0;
-    
-    for (const j of jumps) {
-      if (j.heightCm > peakJumpCm) peakJumpCm = j.heightCm;
-      totalJumpCm += j.heightCm;
+
+    for (const h of sessionJumpHeights) {
+      if (h > peakJumpCm) peakJumpCm = h;
+      totalJumpCm += h;
     }
-    
-    const avgJumpCm = jumps.length > 0 ? totalJumpCm / jumps.length : 0;
+
+    const avgJumpCm = sessionJumpHeights.length > 0
+      ? parseFloat((totalJumpCm / sessionJumpHeights.length).toFixed(1))
+      : 0;
+
+    const attempts = jumpEvents.length > 0
+      ? jumpEvents.map(j => ({ heightCm: j.heightCm, timestamp: j.timestamp }))
+      : sessionJumpHeights.map((h, idx) => ({ heightCm: h, timestamp: Date.now() + idx }));
 
     session.status = "completed";
     session.endTime = new Date();
@@ -116,11 +131,9 @@ router.post("/:sessionId/end", async (req, res) => {
     session.totalSamples = telemetryDocs.length;
     session.peakJumpCm = peakJumpCm;
     session.avgJumpCm = avgJumpCm;
-    session.totalReps = jumps.length;
-    session.attempts = jumps;
-    
-    // Task C: Consistency metric
-    const sessionJumpHeights = jumps.map(j => j.heightCm); // Extract jump heights
+    session.totalReps = sessionJumpHeights.length;
+    session.attempts = attempts;
+    session.jumpHeights = sessionJumpHeights;
     session.jumpConsistencyCm = calculateStdDev(sessionJumpHeights);
 
     if (mongoose.connection.readyState === 1) {
@@ -342,7 +355,16 @@ router.get("/:sessionId/export.csv", async (req, res) => {
     if (!session) return res.status(404).json({ error: "Session not found" });
 
     let csv = "Rep_ID,Timestamp,Metric_Value\n";
-    const attempts = global.sessionJumps ? (global.sessionJumps[sessionId] || session.attempts || []) : (session.attempts || []);
+    let attempts = [];
+    if (mongoose.connection.readyState === 1) {
+      const jumpEvents = await JumpEvent.find({ sessionId }).sort({ timestamp: 1 }).lean();
+      if (jumpEvents.length > 0) {
+        attempts = jumpEvents.map(j => ({ heightCm: j.heightCm, timestamp: j.timestamp }));
+      }
+    }
+    if (attempts.length === 0) {
+      attempts = session.attempts || [];
+    }
     
     attempts.forEach((a, index) => {
       const metric = a.heightCm || a.peakAngularVelocity || 0;

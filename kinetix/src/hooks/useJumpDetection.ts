@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { getApiBaseUrl } from '../utils/connectionConfig';
 import { JumpType } from '../types';
 
 export type JumpState = 'STANDING' | 'DIP' | 'TAKEOFF' | 'AIRBORNE' | 'LANDING';
@@ -325,51 +324,6 @@ export function useJumpDetection(
             totalJumpsRef.current += 1;
             const newCount = totalJumpsRef.current;
 
-            const apiBase = getApiBaseUrl();
-            const jumpPayload = {
-              hang_time: flightDuration,
-              landing_impact: landingImpact,
-              takeoff_expl: takeoffAccel,
-              ground_contact_ms: gctMs,
-              rsi: rsi,
-              timestamp: new Date().toISOString(),
-            };
-
-            const saveToOfflineQueue = (payload: typeof jumpPayload) => {
-              try {
-                const existing = JSON.parse(localStorage.getItem('kinetix_offline_jumps') || '[]');
-                existing.push(payload);
-                localStorage.setItem('kinetix_offline_jumps', JSON.stringify(existing));
-              } catch (_) {}
-            };
-
-            fetch(`${apiBase}/api/jumps`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(jumpPayload),
-            })
-              .then(async (res) => {
-                if (!res.ok) {
-                  saveToOfflineQueue(jumpPayload);
-                  return;
-                }
-                const offline = JSON.parse(localStorage.getItem('kinetix_offline_jumps') || '[]');
-                if (Array.isArray(offline) && offline.length > 0) {
-                  try {
-                    const syncRes = await fetch(`${apiBase}/api/jumps/sync`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ jumps: offline }),
-                    });
-                    if (syncRes.ok) {
-                      localStorage.removeItem('kinetix_offline_jumps');
-                    }
-                  } catch (_) {}
-                }
-              })
-              .catch(() => {
-                saveToOfflineQueue(jumpPayload);
-              });
 
             let integratedVelocity = 0;
             const samples = propulsionSamplesRef.current;

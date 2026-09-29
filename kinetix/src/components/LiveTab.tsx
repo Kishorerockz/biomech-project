@@ -44,77 +44,77 @@ export const LiveTab: React.FC<LiveTabProps> = ({
   const latestAccelRef = useRef<number>(sensorState.procAccelG || 1.0);
   const maxJumpCmRef = useRef<number>(0);
 
-  // Jump Detection Engine
+  // Jump Detection Engine (Demoted in WiFi/Socket.io mode; secondary metrics & standalone BLE fallback)
   const jumpMetrics = useJumpDetection(
     sensorState.procAccelG || 1.0,
     isSessionActive,
     (metrics) => {
-      // ── Pure Flight-Time Kinematics (Gold Standard) ──────────────
-      // h = g · t² / 8  →  122.625 · t²  (t in seconds)
-      // Same formula used by force plates, Optojump, and commercial jump mats.
-      // Using only flight duration avoids noisy velocity integration drift.
       const flightTimeSec = metrics.hangTimeMs / 1000;
       const flightHeightCm = 122.625 * flightTimeSec * flightTimeSec;
+      const calculatedHeightCm = parseFloat(Math.min(120.0, flightHeightCm).toFixed(1));
 
-      // Secondary kinematic check: Takeoff Velocity (Impulse-Momentum Method: h = v^2 / 2g)
-      const velHeightCm = metrics.trueTakeoffVelocity && metrics.trueTakeoffVelocity > 0.6
-        ? (metrics.trueTakeoffVelocity * metrics.trueTakeoffVelocity / 19.62) * 100
-        : 0;
-
-      // Use the higher confidence metric: if flight was truncated (e.g. knee tucking or late freefall),
-      // the takeoff impulse velocity guarantees athletic jump height accuracy
-      let bestHeight = flightHeightCm;
-      if (velHeightCm > 8.0 && velHeightCm > flightHeightCm * 1.3) {
-        bestHeight = (flightHeightCm * 0.35) + (velHeightCm * 0.65);
-      } else if (velHeightCm > flightHeightCm && flightHeightCm < 10.0) {
-        bestHeight = Math.max(flightHeightCm, velHeightCm);
-      }
-
-      const calculatedHeightCm = parseFloat(Math.min(120.0, bestHeight).toFixed(1));
-
-      const isPeak = calculatedHeightCm > maxJumpCmRef.current;
-      if (isPeak) maxJumpCmRef.current = calculatedHeightCm;
-
-      const isFatigued = maxJumpCmRef.current > 15.0 && calculatedHeightCm < (maxJumpCmRef.current * 0.85);
-
-      setSensorState((prev) => ({
-        ...prev,
-        lastJumpCm: calculatedHeightCm,
-        maxJumpCm: isPeak ? calculatedHeightCm : prev.maxJumpCm,
-        totalJumps: metrics.totalJumps,
-        hangTimeMs: metrics.hangTimeMs,
-        landingImpactG: metrics.landingImpactG,
-        takeoffAccelG: metrics.takeoffAccelG,
-        groundContactTimeMs: metrics.groundContactTimeMs,
-        rsi: metrics.rsi,
-        isNewPeak: isPeak,
-      }));
-
-      // Audio & Haptic Feedback
-      if (audioEnabled) {
-        if (metrics.landingImpactG && metrics.landingImpactG >= 4.5) {
-          audioEngine.playShockAlert();
-          audioEngine.speakVoiceAnnouncement(`Caution: Heavy landing. ${metrics.landingImpactG} Gs.`);
-        } else if (isFatigued) {
-          audioEngine.playFatigueWarning();
-          audioEngine.speakVoiceAnnouncement(`Fatigue drop off. ${calculatedHeightCm} centimeters.`);
-        } else {
-          audioEngine.playJumpChime(isPeak);
-          audioEngine.triggerHaptic(isPeak ? [60, 40, 80] : 40);
-          if (isPeak) {
-            audioEngine.speakVoiceAnnouncement(`New peak! ${calculatedHeightCm} centimeters.`);
-          } else {
-            audioEngine.speakVoiceAnnouncement(`${calculatedHeightCm} centimeters.`);
-          }
+      // Always update secondary metrics (RSI, GCT)
+      setSensorState((prev) => {
+        // If in direct BLE mode without backend, fallback to local height calculation
+        if (prev.connectionMode === 'ble') {
+          const isPeak = calculatedHeightCm > maxJumpCmRef.current;
+          if (isPeak) maxJumpCmRef.current = calculatedHeightCm;
+          return {
+            ...prev,
+            lastJumpCm: calculatedHeightCm,
+            maxJumpCm: isPeak ? calculatedHeightCm : prev.maxJumpCm,
+            totalJumps: metrics.totalJumps,
+            hangTimeMs: metrics.hangTimeMs,
+            landingImpactG: metrics.landingImpactG,
+            takeoffAccelG: metrics.takeoffAccelG,
+            groundContactTimeMs: metrics.groundContactTimeMs,
+            rsi: metrics.rsi,
+            isNewPeak: isPeak,
+          };
         }
-      }
+        // In WiFi / Socket.io mode, backend jump_detected is authoritative!
+        // Only update client-derived secondary metrics (RSI, groundContactTimeMs)
+        return {
+          ...prev,
+          groundContactTimeMs: metrics.groundContactTimeMs ?? prev.groundContactTimeMs,
+          rsi: metrics.rsi ?? prev.rsi,
+        };
+      });
 
-      onRecordJump(calculatedHeightCm);
+      // In standalone BLE mode, record jump locally
+      if (sensorState.connectionMode === 'ble') {
+        onRecordJump(calculatedHeightCm);
+      }
     },
     sensorState.hardwareTimestampUs,
     athleteProfile.wearLocation || 'waist',
     athleteProfile.jumpThresholdG
   );
+
+  // Authoritative Audio & Haptic Feedback (Triggers on backend or BLE authoritative jumps)
+  const prevJumpCmRef = useRef<number>(sensorState.lastJumpCm);
+  useEffect(() => {
+    if (sensorState.lastJumpCm > 0 && sensorState.lastJumpCm !== prevJumpCmRef.current) {
+      prevJumpCmRef.current = sensorState.lastJumpCm;
+      setJumpAnimation(true);
+      if (audioEnabled) {
+        if (sensorState.landingImpactG && sensorState.landingImpactG >= 4.5) {
+          audioEngine.playShockAlert();
+          audioEngine.speakVoiceAnnouncement(`Caution: Heavy landing. ${sensorState.landingImpactG} Gs.`);
+        } else {
+          audioEngine.playJumpChime(sensorState.isNewPeak);
+          audioEngine.triggerHaptic(sensorState.isNewPeak ? [60, 40, 80] : 40);
+          if (sensorState.isNewPeak) {
+            audioEngine.speakVoiceAnnouncement(`New peak! ${sensorState.lastJumpCm} centimeters.`);
+          } else {
+            audioEngine.speakVoiceAnnouncement(`${sensorState.lastJumpCm} centimeters.`);
+          }
+        }
+      }
+      const timer = setTimeout(() => setJumpAnimation(false), 800);
+      return () => clearTimeout(timer);
+    }
+  }, [sensorState.lastJumpCm, sensorState.isNewPeak, sensorState.landingImpactG, audioEnabled]);
 
   // Sync state values
   useEffect(() => {
@@ -310,7 +310,7 @@ export const LiveTab: React.FC<LiveTabProps> = ({
               <span className="material-symbols-outlined text-sm text-[#00f5d4]">fitness_center</span>
               <span className="text-[#00f5d4]">JUMPS:</span>
               <span className="font-bold text-white">
-                {sensorState.totalJumps || jumpMetrics.totalJumps || 0}
+                {sensorState.totalJumps || (sensorState.connectionMode === 'ble' ? jumpMetrics.totalJumps : 0)}
               </span>
             </div>
 

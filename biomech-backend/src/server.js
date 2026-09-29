@@ -107,7 +107,6 @@ const sessionState = {};
 //   freefallStart: null,      // timestamp (ms) when freefall began
 // }
 
-global.sessionJumps = {};
 
 function getOrCreateState(sessionId) {
   if (!sessionState[sessionId]) {
@@ -131,7 +130,6 @@ function getOrCreateState(sessionId) {
       lastFusionTime: null,
       packetCount: 0, // Task 2 tracking
     };
-    global.sessionJumps[sessionId] = [];
   }
   return sessionState[sessionId];
 }
@@ -453,12 +451,6 @@ io.on("connection", (socket) => {
             `🦘  Jump detected! ${jump.heightCm} cm @ session ${sessionId.slice(0, 8)}…`
           );
           
-          if (!global.sessionJumps[sessionId]) global.sessionJumps[sessionId] = [];
-          global.sessionJumps[sessionId].push({
-            heightCm: jump.heightCm,
-            timestamp: jump.timestamp,
-          });
-
           // 1. Insert JumpEvent
           JumpEvent.create({
             sessionId,
