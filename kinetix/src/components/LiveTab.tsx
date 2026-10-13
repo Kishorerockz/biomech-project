@@ -4,6 +4,8 @@ import { audioEngine } from '../utils/audio';
 import { JumpAvatar } from './JumpAvatar';
 import { useJumpDetection } from '../hooks/useJumpDetection';
 import { bleHardware } from '../utils/bluetooth';
+import { MLInsightsCard } from './MLInsightsCard';
+import { MLLogger } from './MLLogger';
 
 interface LiveTabProps {
   sensorState: SensorState;
@@ -377,6 +379,15 @@ export const LiveTab: React.FC<LiveTabProps> = ({
               Phase: {livePhase}
             </span>
           </div>
+
+          {/* Real-time Telemetry Diagnostic Chip */}
+          <div className="mt-2.5 flex items-center gap-3 text-[11px] font-mono text-white/50">
+            <span>Live: <strong className="text-white font-semibold">{(sensorState.procAccelG || 1.0).toFixed(2)}g</strong></span>
+            <span>•</span>
+            <span>Push: <strong className="text-purple-300 font-semibold">{sensorState.takeoffAccelG ? `${sensorState.takeoffAccelG.toFixed(1)}g` : '--'}</strong></span>
+            <span>•</span>
+            <span>Hang: <strong className="text-[#00f5d4] font-semibold">{sensorState.hangTimeMs ? `${sensorState.hangTimeMs}ms` : '--'}</strong></span>
+          </div>
         </div>
       </section>
 
@@ -450,6 +461,13 @@ export const LiveTab: React.FC<LiveTabProps> = ({
           </div>
         )}
       </section>
+
+      {/* ML Classification & Biomechanical Insights */}
+      <MLInsightsCard
+        sessionId={currentSession?.id}
+        sensorState={sensorState}
+        currentSession={currentSession}
+      />
 
       {/* 4 Core Athletic Biomechanics KPI Cards */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
@@ -538,6 +556,11 @@ export const LiveTab: React.FC<LiveTabProps> = ({
             <div className="text-[11px] font-mono text-white/40 mt-1">Flight / ground contact</div>
           </div>
         </div>
+      </section>
+
+      {/* ML Logger Pipeline */}
+      <section className="w-full max-w-3xl mt-4 mb-24">
+        <MLLogger sensorState={sensorState} />
       </section>
 
       {/* Floating Bottom Workout Dock */}

@@ -147,10 +147,10 @@ export default function App() {
       }
 
       // 2. Fetch remote history if available
-      let remoteSessions = await fetchSessionHistory(activeAthleteId);
-      if (Array.isArray(remoteSessions) && remoteSessions.length > 0) {
-        const combined = [...localSessions, ...remoteSessions.filter(r => !localSessions.some(l => l.id === r.id))];
-        return { sessions: combined, stats: null };
+      const remotePayload = await fetchSessionHistory(activeAthleteId);
+      if (remotePayload?.sessions?.length) {
+        const combined = [...localSessions, ...remotePayload.sessions.filter(r => !localSessions.some(l => l.id === r.id))];
+        return { sessions: combined, stats: remotePayload.stats || null };
       }
 
       return {
@@ -240,6 +240,68 @@ export default function App() {
 
   // Listener callback for intercepting live raw samples during calibration
   const rawSampleListenerRef = useRef<((raw: { x: number; y: number; z: number }) => void) | null>(null);
+  const hardwareClockRef = useRef({
+    lastRawUs: null as number | null,
+    rolloverUs: 0,
+    epochOffsetMs: null as number | null,
+    lastTimestampMs: null as number | null,
+    timestampJitterMs: 0,
+    estimatedDroppedPackets: 0,
+    invalidTimestampCount: 0,
+  });
+
+  const resetHardwareClock = () => {
+    hardwareClockRef.current = {
+      lastRawUs: null,
+      rolloverUs: 0,
+      epochOffsetMs: null,
+      lastTimestampMs: null,
+      timestampJitterMs: 0,
+      estimatedDroppedPackets: 0,
+      invalidTimestampCount: 0,
+    };
+  };
+
+  const normalizeHardwareTimestamp = (rawTimestampUs: number | undefined) => {
+    const clock = hardwareClockRef.current;
+    if (rawTimestampUs == null || !Number.isFinite(rawTimestampUs)) {
+      const now = Date.now();
+      return { timestampMs: now, timestampUs: undefined };
+    }
+
+    const rawUs = Math.floor(rawTimestampUs) >>> 0;
+    if (clock.lastRawUs != null) {
+      const deltaUs = rawUs - clock.lastRawUs;
+      if (deltaUs < 0 && Math.abs(deltaUs) > 0x80000000) {
+        clock.rolloverUs += 0x100000000;
+      } else if (deltaUs <= 0) {
+        // Microcontroller restarted, timer wrapped, or out-of-order sample
+        if (deltaUs < -1000000) {
+          clock.rolloverUs = 0;
+          clock.epochOffsetMs = null;
+        }
+        clock.invalidTimestampCount += 1;
+        clock.lastRawUs = rawUs;
+        const fallbackMs = clock.lastTimestampMs ? Math.max(Date.now(), clock.lastTimestampMs + 1) : Date.now();
+        clock.lastTimestampMs = fallbackMs;
+        return { timestampMs: fallbackMs, timestampUs: rawUs };
+      } else if (deltaUs > 15000) {
+        clock.estimatedDroppedPackets += Math.max(0, Math.round(deltaUs / 10000) - 1);
+      }
+
+      const intervalMs = deltaUs / 1000;
+      clock.timestampJitterMs = clock.timestampJitterMs * 0.9 + Math.abs(intervalMs - 10) * 0.1;
+    }
+
+    clock.lastRawUs = rawUs;
+    const extendedUs = clock.rolloverUs + rawUs;
+    if (clock.epochOffsetMs == null) {
+      clock.epochOffsetMs = Date.now() - extendedUs / 1000;
+    }
+    const timestampMs = Math.round(clock.epochOffsetMs + extendedUs / 1000);
+    clock.lastTimestampMs = timestampMs;
+    return { timestampMs, timestampUs: extendedUs };
+  };
 
   // ── Imperative Jump Detector ─────────────────────────────────────────────
   // Lives in a ref so it persists across renders and is NEVER affected by
@@ -282,6 +344,8 @@ export default function App() {
     const rawY = Number(data.y) || 0;
     const rawZ = Number(data.z) || 0;
     const rawT = typeof data.t === 'number' ? data.t : undefined;
+    const normalizedTimestamp = normalizeHardwareTimestamp(rawT);
+    const validTimestampMs = normalizedTimestamp.timestampMs ?? Date.now();
 
     // Pass raw uncalibrated sample to calibration listener if active
     if (rawSampleListenerRef.current) {
@@ -308,6 +372,17 @@ export default function App() {
     // This runs synchronously BEFORE setSensorState, so zero samples are skipped.
     jumpDetectorRef.current.processPacket(magnitudeG);
 
+    // Forward raw samples to the backend ML pipeline using its packet contract.
+    if (isSessionActiveRef.current && activeSocketRef.current?.connected) {
+      activeSocketRef.current.emit('hardware_data', {
+        sessionId: currentSessionIdRef.current,
+        timestamp: validTimestampMs,
+        accel: { x: rawX, y: rawY, z: rawZ },
+        gyro: { x: Number(data.gx) || 0, y: Number(data.gy) || 0, z: Number(data.gz) || 0 },
+        battery: data.bat != null ? Number(data.bat) : null,
+      });
+    }
+
     // Convert raw 16-bit gyro values to deg/s (MPU-6050 sensitivity for ±2000 deg/s is 16.4 LSB/(deg/s))
     const gyroScale = 16.4;
     const gyroX = data.gx != null ? parseFloat((Number(data.gx) / gyroScale).toFixed(2)) : 0;
@@ -323,8 +398,13 @@ export default function App() {
       procAccelG: magnitudeG,
       connected: true,
       connectionMode: source,
+      telemetryPacketCount: (prev.telemetryPacketCount || 0) + 1,
       samplingRateHz: 100,
-      hardwareTimestampUs: rawT,
+      hardwareTimestampUs: normalizedTimestamp.timestampUs,
+      packetVersion: typeof data.v === 'number' ? data.v : (prev.packetVersion || 1),
+      timestampJitterMs: Number(hardwareClockRef.current.timestampJitterMs.toFixed(2)),
+      estimatedDroppedPackets: hardwareClockRef.current.estimatedDroppedPackets,
+      invalidTimestampCount: hardwareClockRef.current.invalidTimestampCount,
       batteryPercent: data.bat != null ? Number(data.bat) : prev.batteryPercent,
       deviceName: source === 'ble' ? 'Kinetix Wearable (BLE)' : 'ESP32 Wi-Fi Node',
     }));
@@ -356,6 +436,7 @@ export default function App() {
             ws?.close();
             return;
           }
+          resetHardwareClock();
           setConnectionMode('wifi');
           connectionModeRef.current = 'wifi';
           setSensorState((prev) => ({
@@ -412,10 +493,9 @@ export default function App() {
   // 2. Backend Socket.io (Optional backend relay / simulator stream)
   const activeSocketRef = useRef<any>(null);
   const handleRecordJumpRef = useRef<(jumpCm: number) => void>(() => {});
+  const lastRecordedJumpTimeRef = useRef<number>(0);
 
   useEffect(() => {
-    if (connectionModeRef.current === 'ble') return;
-
     const backendUrl = getBackendUrl(connectionConfigRef.current);
 
     const socket = io(backendUrl, {
@@ -429,9 +509,7 @@ export default function App() {
       console.log('[Kinetix-SocketIO] Connected to backend:', backendUrl);
       setSensorState((prev) => ({
         ...prev,
-        connected: true,
-        connectionMode: prev.connectionMode === 'disconnected' ? 'wifi' : prev.connectionMode,
-        deviceName: prev.deviceName || 'Biomech Server',
+        reconnecting: false,
       }));
     });
 
@@ -464,13 +542,19 @@ export default function App() {
         connected: true,
         connectionMode: 'wifi',
         reconnecting: false,
+        telemetryPacketCount: (prev.telemetryPacketCount || 0) + 1,
+        samplingRateHz: 100,
       }));
     });
 
     // Authoritative jump detection from backend if present
     socket.on('jump_detected', (data: any) => {
+      if (!isSessionActiveRef.current || data.sessionId !== currentSessionIdRef.current) return;
       console.log('[Kinetix-SocketIO] Jump detected event received from backend:', data);
       const height = typeof data.heightCm === 'number' ? data.heightCm : 0;
+      const now = Date.now();
+      if (now - lastRecordedJumpTimeRef.current < 400) return;
+      lastRecordedJumpTimeRef.current = now;
       setSensorState((prev) => {
         const isPeak = height > prev.maxJumpCm;
         return {
@@ -482,6 +566,13 @@ export default function App() {
           landingImpactG: typeof data.landingImpactG === 'number' ? data.landingImpactG : prev.landingImpactG,
           takeoffAccelG: typeof data.takeoffAccelG === 'number' ? data.takeoffAccelG : prev.takeoffAccelG,
           twistDeg: typeof data.twistDeg === 'number' ? data.twistDeg : prev.twistDeg,
+          jumpQuality: data.signalQuality ? {
+            valid: data.valid !== false,
+            signalQuality: data.signalQuality,
+            packetLossPercent: Number(data.packetLossPercent) || 0,
+            samplingRateHz: Number(data.samplingRateHz) || 0,
+            detectorVersion: data.detectorVersion || 'unknown',
+          } : prev.jumpQuality,
           isNewPeak: isPeak,
         };
       });
@@ -523,9 +614,7 @@ export default function App() {
           if (activeWsRef.current && activeWsRef.current.readyState === WebSocket.OPEN) {
             activeWsRef.current.close();
           }
-          if (activeSocketRef.current && activeSocketRef.current.connected) {
-            activeSocketRef.current.disconnect();
-          }
+          resetHardwareClock();
           setConnectionMode('ble');
           connectionModeRef.current = 'ble';
           setSensorState((prev) => ({
@@ -534,9 +623,19 @@ export default function App() {
             connectionMode: 'ble',
             deviceName: status.deviceName || 'Kinetix Wearable (BLE)',
           }));
-        } else if (status.error) {
-          console.warn('[BLE Status]:', status.error);
-          alert(`Bluetooth Error: ${status.error}`);
+        } else {
+          setConnectionMode('disconnected');
+          connectionModeRef.current = 'disconnected';
+          setSensorState((prev) => ({
+            ...prev,
+            connected: false,
+            connectionMode: 'disconnected',
+            reconnecting: Boolean(status.deviceName?.toLowerCase().includes('connecting') || status.deviceName?.toLowerCase().includes('scanning')),
+          }));
+          if (status.error) {
+            console.warn('[BLE Status]:', status.error);
+            alert(`Bluetooth Error: ${status.error}`);
+          }
         }
       }
     );
@@ -544,6 +643,11 @@ export default function App() {
 
   const [isSessionActive, setIsSessionActive] = useState<boolean>(false);
   const [sessionElapsedSec, setSessionElapsedSec] = useState<number>(0);
+  const isSessionActiveRef = useRef(false);
+
+  useEffect(() => {
+    isSessionActiveRef.current = isSessionActive;
+  }, [isSessionActive]);
 
   // Live session timer updating React Query cache
   useEffect(() => {
@@ -615,6 +719,10 @@ export default function App() {
 
   // ── Wire imperative detector callbacks (need setSensorState in scope) ───────
   onJumpDetectedRef.current = (jump: DetectedJump) => {
+    const now = Date.now();
+    if (now - lastRecordedJumpTimeRef.current < 400) return;
+    lastRecordedJumpTimeRef.current = now;
+
     setSensorState((prev) => {
       const isPeak = jump.heightCm > prev.maxJumpCm;
       if (isPeak) maxJumpCmImperativeRef.current = jump.heightCm;
@@ -684,7 +792,7 @@ export default function App() {
 
       // 2. Notify backend if running
       try {
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+        const backendUrl = getBackendUrl(connectionConfigRef.current);
         const res = await fetch(`${backendUrl}/api/sessions/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -761,7 +869,7 @@ export default function App() {
       }
 
       try {
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+        const backendUrl = getBackendUrl(connectionConfigRef.current);
         await fetch(`${backendUrl}/api/sessions/${activeId}/end`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -969,6 +1077,7 @@ export default function App() {
             onSave={handleSaveConnectionConfig}
             onClose={() => setShowConnectionModal(false)}
             sensorState={sensorState}
+            onPairBLE={handlePairBLE}
           />
         )}
         {finishedSessionSummary && (

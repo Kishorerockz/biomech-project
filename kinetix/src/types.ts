@@ -14,6 +14,7 @@ export interface JumpAttempt {
 export interface JumpRecord {
   id: number;
   timestamp: string;
+  height_cm?: number;
   hang_time: number;
   landing_impact: number;
   takeoff_expl: number;
@@ -60,6 +61,7 @@ export interface SensorState {
   batteryPercent: number;
   signalDbm: number;
   ipAddress: string;
+  telemetryPacketCount?: number;
   samplingRateHz: number;
   procAccelG: number;
   lastJumpCm: number;
@@ -72,11 +74,22 @@ export interface SensorState {
   groundContactTimeMs?: number;
   rsi?: number;
   hardwareTimestampUs?: number;
+  packetVersion?: number;
   twistDeg?: number;
   orientation?: { x: number; y: number; z: number; w: number };
   streamHz?: number;
+  timestampJitterMs?: number;
+  estimatedDroppedPackets?: number;
+  invalidTimestampCount?: number;
+  jumpQuality?: {
+    valid: boolean;
+    signalQuality: 'good' | 'fair' | 'poor';
+    packetLossPercent: number;
+    samplingRateHz: number;
+    detectorVersion: string;
+  };
   /** Live jump phase from the imperative JumpDetector (bypasses React batching) */
-  jumpPhase?: 'GROUNDED' | 'TAKEOFF' | 'FREEFALL' | 'LANDING';
+  jumpPhase?: 'GROUNDED' | 'TAKEOFF' | 'AIRBORNE' | 'FREEFALL' | 'LANDING';
 }
 
 

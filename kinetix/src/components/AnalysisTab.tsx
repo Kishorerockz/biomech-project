@@ -31,7 +31,7 @@ export const AnalysisTab: React.FC<AnalysisTabProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [downloadNotification, setDownloadNotification] = useState(false);
 
-  // Convert currentSession attempts into JumpRecord format as seamless fallback/live representation
+  // Keep the recorded live height as the source of truth for analysis.
   const sessionAttemptsToRecords = (session?: SessionData): JumpRecord[] => {
     if (!session || !session.attempts || session.attempts.length === 0) return [];
     return session.attempts.map((att, idx) => {
@@ -40,6 +40,7 @@ export const AnalysisTab: React.FC<AnalysisTabProps> = ({
       return {
         id: att.id || idx + 1,
         timestamp: att.timestampStr || new Date().toISOString(),
+        height_cm: att.jumpCm,
         hang_time: hangTimeMs,
         landing_impact: 2.8,
         takeoff_expl: 2.2,
@@ -49,43 +50,12 @@ export const AnalysisTab: React.FC<AnalysisTabProps> = ({
     });
   };
 
-  // Fetch complete jump history from GET /api/jumps, falling back smoothly to currentSession attempts
+  // The backend has no /api/jumps endpoint; the selected session already owns
+  // the authoritative attempts and also works offline.
   useEffect(() => {
-    let isMounted = true;
-    const fetchJumps = async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-        const res = await fetch(`${apiBase}/api/jumps`, { signal: AbortSignal.timeout(2000) });
-        if (!res.ok) {
-          throw new Error(`Server returned status ${res.status}`);
-        }
-        const data: JumpRecord[] = await res.json();
-        if (isMounted) {
-          if (Array.isArray(data) && data.length > 0) {
-            const sorted = [...data].sort((a, b) => a.id - b.id);
-            setJumps(sorted);
-          } else {
-            setJumps(sessionAttemptsToRecords(currentSession));
-          }
-        }
-      } catch (err: any) {
-        if (isMounted) {
-          // Gracefully fallback to current session jumps so mobile analysis works seamlessly
-          setJumps(sessionAttemptsToRecords(currentSession));
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    fetchJumps();
-    return () => {
-      isMounted = false;
-    };
+    setError(null);
+    setJumps(sessionAttemptsToRecords(currentSession));
+    setIsLoading(false);
   }, [currentSession]);
 
   // Aggregate KPI Calculations
@@ -110,13 +80,13 @@ export const AnalysisTab: React.FC<AnalysisTabProps> = ({
   // Chart data mapping: Compute physical jump elevation (cm) from hang time (122.6 * t^2)
   // Also compute fatigue curve relative to peak baseline
   const peakHeightEver = jumps.reduce((max, j) => {
-    const h = 122.6 * Math.pow(j.hang_time / 1000, 2);
+    const h = j.height_cm ?? 122.625 * Math.pow(j.hang_time / 1000, 2);
     return Math.max(max, h);
   }, 0);
 
   const chartData = jumps.map((j, index) => {
     const flightSec = j.hang_time / 1000;
-    const heightCm = parseFloat((122.6 * Math.pow(flightSec, 2)).toFixed(1));
+    const heightCm = parseFloat((j.height_cm ?? 122.625 * Math.pow(flightSec, 2)).toFixed(1));
     // Fatigue index: % retention of peak jump capacity
     const retentionPercent = peakHeightEver > 0 ? Math.min(100, Math.round((heightCm / peakHeightEver) * 100)) : 100;
     const fatigueDropPercent = Math.max(0, 100 - retentionPercent);

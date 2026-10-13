@@ -1,8 +1,10 @@
 /**
  * Connection Configuration Utility
  * Stores and retrieves server connection settings from localStorage.
- * No hardcoded IP addresses — users configure this in Settings.
+ * No hardcoded laptop IP addresses — users configure this in Settings.
  */
+
+import { Capacitor } from '@capacitor/core';
 
 export interface ConnectionConfig {
   wsHost: string;   // WebSocket relay server host (IP or hostname)
@@ -52,7 +54,7 @@ export function getBackendUrl(config?: ConnectionConfig): string {
     return import.meta.env.VITE_BACKEND_URL;
   }
   const c = config ?? getConnectionConfig();
-  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+  if (!Capacitor.isNativePlatform() && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
     return `http://localhost:${c.apiPort || 5000}`;
   }
   return `http://${c.wsHost}:${c.apiPort || 5000}`;

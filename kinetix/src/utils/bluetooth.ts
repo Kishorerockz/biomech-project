@@ -21,7 +21,40 @@ export interface RawTelemetrySample {
   gz?: number;
   t?: number;
   r?: number;
+  v?: number;
   bat?: number;
+}
+
+function consumeJsonTelemetryChunk(
+  buffer: string,
+  chunk: string,
+  onSample: (sample: RawTelemetrySample) => void,
+): string {
+  let pending = buffer + chunk;
+  if (pending.length > 512) {
+    const lastBrace = pending.lastIndexOf('{');
+    pending = lastBrace >= 0 ? pending.slice(lastBrace) : '';
+  }
+  while (pending.length > 0) {
+    const start = pending.indexOf('{');
+    if (start < 0) return '';
+    if (start > 0) pending = pending.slice(start);
+
+    const end = pending.indexOf('}');
+    if (end < 0) return pending;
+
+    const candidate = pending.slice(0, end + 1);
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed.x === 'number' && typeof parsed.y === 'number' && typeof parsed.z === 'number') {
+        onSample(parsed);
+      }
+      pending = pending.slice(end + 1);
+    } catch {
+      pending = pending.slice(1);
+    }
+  }
+  return pending;
 }
 
 export class BluetoothHardwareManager {
@@ -123,14 +156,15 @@ export class BluetoothHardwareManager {
 
       // Start receiving real-time 100Hz MPU-6050 notifications (Binary or JSON)
       const decoder = new TextDecoder('utf-8');
+      let jsonBuffer = '';
       await BleClient.startNotifications(
         deviceId,
         NORDIC_UART_SERVICE,
         NORDIC_UART_TX,
         (value: DataView) => {
           try {
-            // Check for 19-byte binary telemetry packet (header = 0xAA)
-            if (value.byteLength === 19 && value.getUint8(0) === 0xAA) {
+            // Check for binary telemetry packet (18-byte standard or 19-byte with version)
+            if (value.byteLength >= 18 && value.getUint8(0) === 0xAA) {
               const ax = value.getInt16(1, true);
               const ay = value.getInt16(3, true);
               const az = value.getInt16(5, true);
@@ -139,17 +173,14 @@ export class BluetoothHardwareManager {
               const gz = value.getInt16(11, true);
               const t  = value.getUint32(13, true);
               const r  = value.getUint8(17);
+              const v  = value.byteLength >= 19 ? value.getUint8(18) : 1;
 
-              onDataReceived({ x: ax, y: ay, z: az, gx, gy, gz, t, r });
+              onDataReceived({ x: ax, y: ay, z: az, gx, gy, gz, t, r, v });
               return;
             }
 
-            // Fallback: UTF-8 JSON parsing
-            const str = decoder.decode(value);
-            const parsed = JSON.parse(str);
-            if (parsed && typeof parsed.x === 'number') {
-              onDataReceived(parsed);
-            }
+            // Fallback: BLE may split the firmware JSON across notifications.
+            jsonBuffer = consumeJsonTelemetryChunk(jsonBuffer, decoder.decode(value), onDataReceived);
           } catch {
             // Drop partial packet without crashing
           }
@@ -167,6 +198,10 @@ export class BluetoothHardwareManager {
       if (!this.isExplicitDisconnect && this.connectedDeviceId) {
         this.scheduleAutoReconnect();
       }
+      onStatusChange({
+        connected: false,
+        error: err.message || 'Could not connect to the wearable BLE service.',
+      });
       return false;
     }
   }
@@ -272,10 +307,11 @@ export class BluetoothHardwareManager {
       }
 
       const decoder = new TextDecoder('utf-8');
+      let jsonBuffer = '';
       txChar.addEventListener('characteristicvaluechanged', (event: any) => {
         const value: DataView = event.target.value;
         try {
-          if (value.byteLength === 19 && value.getUint8(0) === 0xAA) {
+          if (value.byteLength >= 18 && value.getUint8(0) === 0xAA) {
             const ax = value.getInt16(1, true);
             const ay = value.getInt16(3, true);
             const az = value.getInt16(5, true);
@@ -284,16 +320,13 @@ export class BluetoothHardwareManager {
             const gz = value.getInt16(11, true);
             const t  = value.getUint32(13, true);
             const r  = value.getUint8(17);
+            const v  = value.byteLength >= 19 ? value.getUint8(18) : 1;
 
-            onDataReceived({ x: ax, y: ay, z: az, gx, gy, gz, t, r });
+            onDataReceived({ x: ax, y: ay, z: az, gx, gy, gz, t, r, v });
             return;
           }
 
-          const decodedStr = decoder.decode(value);
-          const parsed = JSON.parse(decodedStr);
-          if (parsed && typeof parsed.x === 'number') {
-            onDataReceived(parsed);
-          }
+          jsonBuffer = consumeJsonTelemetryChunk(jsonBuffer, decoder.decode(value), onDataReceived);
         } catch {
           // Ignore drop
         }

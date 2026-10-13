@@ -31,6 +31,7 @@ export interface DetectedJump {
   hangTimeMs: number;
   takeoffG: number;
   landingG: number;
+  velocityMps?: number;
 }
 
 export class JumpDetector {
@@ -43,26 +44,28 @@ export class JumpDetector {
   private airborneStartMs: number = 0;
   private landingStartMs: number = 0;
   private peakTakeoffG: number = 0;
+  private lastSampleTimeMs: number = 0;
+  private takeoffVelocity: number = 0; // Integrated upward takeoff velocity (m/s)
 
   // ── Thresholds ─────────────────────────────────────────────────────────
-  /** g above baseline to begin TAKEOFF detection (filters walking/arm swings) */
-  private readonly TAKEOFF_ABOVE = 0.40;
+  /** g above baseline to begin upward motion detection */
+  private readonly TAKEOFF_ABOVE = 0.25;
   /** Minimum propulsion peak before liftoff is accepted */
-  private readonly MIN_PROPULSION = 0.28;
-  /** Minimum time in TAKEOFF phase before liftoff check (anti-oscillation) */
-  private readonly MIN_TAKEOFF_MS = 40;
-  /** g above baseline to detect landing impact spike */
-  private readonly LANDING_ABOVE = 0.30;
-  /** Minimum airborne time — filters micro-hops; ~2.8cm equivalent */
-  private readonly MIN_AIRBORNE_MS = 150;
-  /** Maximum airborne time — abort if exceeded (sensor thrown/dropped) */
-  private readonly MAX_AIRBORNE_MS = 900;
-  /** Abort TAKEOFF if stuck too long (athlete crouched but didn't jump) */
-  private readonly TAKEOFF_TIMEOUT_MS = 700;
+  private readonly MIN_PROPULSION = 0.20;
+  /** Minimum time in upward motion phase before liftoff check */
+  private readonly MIN_TAKEOFF_MS = 25;
+  /** Minimum g required to confirm landing impact shock */
+  private readonly LANDING_MIN_G = 1.40;
+  /** Minimum airborne time — 100ms capture */
+  private readonly MIN_AIRBORNE_MS = 100;
+  /** Maximum airborne time — abort if exceeded */
+  private readonly MAX_AIRBORNE_MS = 1200;
+  /** Abort TAKEOFF if stuck too long without liftoff */
+  private readonly TAKEOFF_TIMEOUT_MS = 800;
   /** Max landing settle duration */
-  private readonly LANDING_SETTLE_MS = 400;
+  private readonly LANDING_SETTLE_MS = 300;
   /** Post-jump debounce */
-  private readonly COOLDOWN_MS = 350;
+  private readonly COOLDOWN_MS = 250;
 
   private onJumpDetected: (jump: DetectedJump) => void;
   private onPhaseChange: ((phase: JumpPhase) => void) | undefined;
@@ -78,13 +81,15 @@ export class JumpDetector {
   /**
    * Call on EVERY incoming sensor packet, synchronously inside the
    * WebSocket/BLE onmessage handler — before React state is updated.
-   * @param magnitudeG  Resultant acceleration magnitude in G-force (NOT raw LSB)
+   * @param magnitudeG  Resultant acceleration magnitude in G-force
    */
   processPacket(magnitudeG: number): JumpPhase {
     const now = performance.now();
+    const dt = this.lastSampleTimeMs > 0 ? Math.min(0.05, Math.max(0.005, (now - this.lastSampleTimeMs) / 1000)) : 0.01;
+    this.lastSampleTimeMs = now;
 
-    // ── Baseline initialization ───────────────────────────────────────────
-    if (!this.initialized && magnitudeG > 0.5 && magnitudeG < 2.0) {
+    // ── Baseline initialization & tracking ────────────────────────────────
+    if (!this.initialized && magnitudeG > 0.4 && magnitudeG < 2.2) {
       this.baseline = magnitudeG;
       this.initialized = true;
     }
@@ -96,16 +101,18 @@ export class JumpDetector {
 
       // ── GROUNDED ─────────────────────────────────────────────────────
       case 'GROUNDED': {
-        // Slow baseline drift compensation while standing still and stable
-        if (now > this.cooldownUntil && magnitudeG >= 0.85 && magnitudeG <= 1.15) {
-          this.baseline = this.baseline * 0.995 + magnitudeG * 0.005;
+        // Continuous baseline adaptation when still
+        if (now > this.cooldownUntil && magnitudeG >= 0.80 && magnitudeG <= 1.25) {
+          this.baseline = this.baseline * 0.99 + magnitudeG * 0.01;
         }
 
-        if (now >= this.cooldownUntil && magnitudeG > b + this.TAKEOFF_ABOVE) {
+        // Trigger upward motion / takeoff
+        if (now >= this.cooldownUntil && magnitudeG > (b + this.TAKEOFF_ABOVE)) {
           this.phase = 'TAKEOFF';
           this.takeoffStartMs = now;
           this.peakTakeoffG = magnitudeG;
-          console.log(`[Jump] TAKEOFF @ ${magnitudeG.toFixed(3)}g (baseline=${b.toFixed(3)}, thresh=${(b + this.TAKEOFF_ABOVE).toFixed(3)})`);
+          this.takeoffVelocity = 0;
+          console.log(`[Jump] TAKEOFF detected @ ${magnitudeG.toFixed(2)}g (baseline=${b.toFixed(2)})`);
         }
         break;
       }
@@ -114,31 +121,32 @@ export class JumpDetector {
       case 'TAKEOFF': {
         if (magnitudeG > this.peakTakeoffG) this.peakTakeoffG = magnitudeG;
 
+        // Integrate upward net acceleration: a_net = (g - baseline) * 9.81 m/s²
+        const netG = Math.max(0, magnitudeG - b);
+        this.takeoffVelocity += netG * 9.80665 * dt;
+
         const takeoffDur = now - this.takeoffStartMs;
 
-        // Timeout: crouched/stumbled but didn't jump
+        // Timeout: motion stopped without entering flight
         if (takeoffDur > this.TAKEOFF_TIMEOUT_MS) {
           this.phase = 'GROUNDED';
           this.cooldownUntil = now + this.COOLDOWN_MS;
-          console.log(`[Jump] TAKEOFF timeout → GROUNDED`);
+          this.takeoffVelocity = 0;
+          console.log(`[Jump] TAKEOFF timeout after ${takeoffDur.toFixed(0)}ms → GROUNDED`);
           break;
         }
 
-        // LIFTOFF DETECTION (accurate timing):
-        // Liftoff ≈ when g crosses below baseline (feet leave floor, GRF → 0).
-        // Guards:
-        //   1. Min 40ms in TAKEOFF (ensures we've seen the full push spike)
-        //   2. Real propulsion peak observed (> baseline + MIN_PROPULSION)
-        //   3. g now below baseline (baseline crossing = liftoff)
-        const hadRealPush = this.peakTakeoffG >= b + this.MIN_PROPULSION;
-        const crossedBaseline = magnitudeG < b;          // ← key fix: < baseline, not < baseline+0.10
+        // LIFTOFF DETECTION:
+        // When upward push slows down and acceleration crosses below baseline (or <= 0.98g)
+        const hadRealPush = this.peakTakeoffG >= (b + this.MIN_PROPULSION);
+        const enteredFreefall = magnitudeG < b || magnitudeG <= 0.98;
 
-        if (takeoffDur >= this.MIN_TAKEOFF_MS && hadRealPush && crossedBaseline) {
+        if (takeoffDur >= this.MIN_TAKEOFF_MS && hadRealPush && enteredFreefall) {
           this.phase = 'AIRBORNE';
           this.airborneStartMs = now;
           console.log(
-            `[Jump] AIRBORNE! peakPush=${this.peakTakeoffG.toFixed(3)}g, ` +
-            `now=${magnitudeG.toFixed(3)}g, pushDur=${takeoffDur.toFixed(0)}ms`
+            `[Jump] AIRBORNE! Peak push=${this.peakTakeoffG.toFixed(2)}g, ` +
+            `v0=${this.takeoffVelocity.toFixed(2)}m/s, Push duration=${takeoffDur.toFixed(0)}ms`
           );
         }
         break;
@@ -148,41 +156,50 @@ export class JumpDetector {
       case 'AIRBORNE': {
         const airborneMs = now - this.airborneStartMs;
 
-        // Abort: sensor dropped/thrown
+        // Abort: flight exceeded max realistic time
         if (airborneMs > this.MAX_AIRBORNE_MS) {
           this.phase = 'GROUNDED';
           this.cooldownUntil = now + this.COOLDOWN_MS;
-          console.log(`[Jump] AIRBORNE timeout → GROUNDED`);
+          this.takeoffVelocity = 0;
+          console.log(`[Jump] AIRBORNE timeout (${airborneMs.toFixed(0)}ms) → GROUNDED`);
           break;
         }
 
-        // LANDING DETECTION:
-        //   - Sufficient hang time (filters micro-movements)
-        //   - Clear impact spike above baseline
-        if (airborneMs >= this.MIN_AIRBORNE_MS && magnitudeG > b + this.LANDING_ABOVE) {
+        // LANDING / TOUCHDOWN DETECTION:
+        // Must be in air for at least MIN_AIRBORNE_MS (100ms).
+        // Impact occurs when deceleration shock spikes above landing threshold.
+        const isImpactShock = magnitudeG >= Math.min(this.LANDING_MIN_G, b + 0.32) || magnitudeG >= 1.38;
+
+        if (airborneMs >= this.MIN_AIRBORNE_MS && isImpactShock) {
           this.phase = 'LANDING';
           this.landingStartMs = now;
 
-          // ── Height formula ──────────────────────────────────────────
-          // Physics: h = (1/2) * g_earth * (T/2)²
-          //        = g_earth * T² / 8
-          //        = 9.81 * T² / 8   [m]
-          //        = 122.625 * T²    [cm]   where T = total hang time in seconds
           const hangTimeMs = Math.round(airborneMs);
           const t = hangTimeMs / 1000;
-          const heightCm = parseFloat(Math.min(130, 122.625 * t * t).toFixed(1));
+
+          // 1. Classical flight-time formula: h_flight = (1/8) * g * T²
+          const hFlightCm = 122.625 * t * t;
+
+          // Keep takeoff velocity as a diagnostic feature only. Integrating
+          // acceleration is too sensitive to orientation and gravity leakage
+          // to correct the official height measurement reliably.
+          const v0 = Math.max(0, this.takeoffVelocity);
+          const heightCm = parseFloat(Math.min(130, hFlightCm).toFixed(1));
 
           console.log(
-            `[Jump] LANDING! hangTime=${hangTimeMs}ms → height=${heightCm}cm | ` +
-            `impact=${magnitudeG.toFixed(3)}g`
+            `[Jump] LANDING DETECTED! HangTime=${hangTimeMs}ms, v0=${v0.toFixed(2)}m/s | ` +
+            `hFlight=${hFlightCm.toFixed(1)}cm → Final=${heightCm}cm | ` +
+            `Impact=${magnitudeG.toFixed(2)}g`
           );
 
-          if (heightCm >= 2.0) {                        // ← 2cm minimum (sanity check)
+          // Ignore small false values like 2cm, 3cm (minimum threshold = 5.0cm)
+          if (heightCm >= 5.0) {
             this.onJumpDetected({
               heightCm,
               hangTimeMs,
               takeoffG: parseFloat(this.peakTakeoffG.toFixed(2)),
               landingG: parseFloat(magnitudeG.toFixed(2)),
+              velocityMps: parseFloat(v0.toFixed(2)),
             });
           }
         }
@@ -193,11 +210,12 @@ export class JumpDetector {
       case 'LANDING': {
         // Settle: g returns toward baseline or max duration exceeded
         if (
-          magnitudeG < b + 0.12 ||
+          magnitudeG < b + 0.15 ||
           now - this.landingStartMs > this.LANDING_SETTLE_MS
         ) {
           this.phase = 'GROUNDED';
           this.cooldownUntil = now + this.COOLDOWN_MS;
+          this.takeoffVelocity = 0;
           console.log(`[Jump] Settled → GROUNDED (baseline=${this.baseline.toFixed(3)})`);
         }
         break;
@@ -218,6 +236,7 @@ export class JumpDetector {
     this.phase = 'GROUNDED';
     this.cooldownUntil = 0;
     this.peakTakeoffG = 0;
+    this.takeoffVelocity = 0;
     this.initialized = false;
     if (this.onPhaseChange) this.onPhaseChange('GROUNDED');
     console.log('[Jump] Detector reset (tare)');

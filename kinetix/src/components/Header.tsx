@@ -23,6 +23,17 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleTheme,
 }) => {
   const { isInstallable, promptInstall } = usePWAInstall();
+  const isConnected = sensorState.connected || sensorState.connectionMode !== 'disconnected';
+  const connectionMode = sensorState.connectionMode;
+  const telemetryLabel = isConnected
+    ? (connectionMode === 'ble' ? 'ESP32 BLE (100Hz)' : 'ESP32 Wi-Fi (100Hz)')
+    : 'Connect Wearable';
+  const mobileLabel = isConnected
+    ? (connectionMode === 'ble' ? 'BLE 100Hz' : 'Wi-Fi 100Hz')
+    : 'Connect';
+  const telemetryTone = isConnected
+    ? 'bg-[#00f5d4]/10 border-[#00f5d4]/40 text-[#00f5d4]'
+    : 'bg-white/[0.04] border-white/10 text-white/50 hover:text-white';
 
   const tabs: { id: TabType; label: string; icon: string }[] = [
     { id: 'live', label: 'Live Telemetry', icon: 'sensors' },
@@ -51,30 +62,16 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Unified Connection Badge */}
           <button
             onClick={onOpenConnectionModal}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-mono font-medium transition-all active:scale-95 ${
-              sensorState.connectionMode === 'wifi'
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                : sensorState.connectionMode === 'ble'
-                ? 'bg-[#00f5d4]/10 border-[#00f5d4]/30 text-[#00f5d4]'
-                : 'bg-white/[0.04] border-white/10 text-white/50 hover:text-white'
-            }`}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-mono font-medium transition-all active:scale-95 ${telemetryTone}`}
             title="Configure Wearable Connection"
           >
             <span
               className={`w-1.5 h-1.5 rounded-full ${
-                sensorState.connectionMode === 'wifi'
-                  ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
-                  : sensorState.connectionMode === 'ble'
-                  ? 'bg-[#00f5d4] shadow-[0_0_8px_#00f5d4]'
-                  : 'bg-white/30'
+                isConnected ? 'bg-[#00f5d4] shadow-[0_0_8px_#00f5d4] animate-pulse' : 'bg-white/30'
               }`}
             />
             <span>
-              {sensorState.connectionMode === 'wifi'
-                ? 'Wi-Fi 100Hz'
-                : sensorState.connectionMode === 'ble'
-                ? 'BLE 100Hz'
-                : 'Connect'}
+              {mobileLabel}
             </span>
           </button>
         </div>
@@ -132,30 +129,16 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Unified Connection Badge */}
           <button
             onClick={onOpenConnectionModal}
-            className={`flex items-center gap-2 ml-2 px-3 py-1.5 rounded-full border text-xs font-mono font-medium transition-all hover:scale-105 active:scale-95 cursor-pointer ${
-              sensorState.connectionMode === 'wifi'
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.15)]'
-                : sensorState.connectionMode === 'ble'
-                ? 'bg-[#00f5d4]/10 border-[#00f5d4]/30 text-[#00f5d4] shadow-[0_0_15px_rgba(0,245,212,0.2)]'
-                : 'bg-white/[0.04] border-white/10 text-white/50 hover:text-white hover:border-white/20'
-            }`}
+            className={`flex items-center gap-2 ml-2 px-3 py-1.5 rounded-full border text-xs font-mono font-medium transition-all hover:scale-105 active:scale-95 cursor-pointer ${telemetryTone}`}
             title="Configure Sensor Connection"
           >
             <span
               className={`w-2 h-2 rounded-full ${
-                sensorState.connectionMode === 'wifi'
-                  ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
-                  : sensorState.connectionMode === 'ble'
-                  ? 'bg-[#00f5d4] shadow-[0_0_8px_#00f5d4]'
-                  : 'bg-white/30'
+                isConnected ? 'bg-[#00f5d4] shadow-[0_0_8px_#00f5d4] animate-pulse' : 'bg-white/30'
               }`}
             />
             <span>
-              {sensorState.connectionMode === 'wifi'
-                ? 'ESP32 Wi-Fi (100Hz)'
-                : sensorState.connectionMode === 'ble'
-                ? 'ESP32 BLE (100Hz)'
-                : 'Connect Wearable'}
+              {telemetryLabel}
             </span>
           </button>
 

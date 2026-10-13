@@ -10,6 +10,9 @@ const Session = require("./models/Session");
 const Telemetry = require("./models/Telemetry");
 const JumpEvent = require("./models/JumpEvent");
 const SwingEvent = require("./models/SwingEvent");
+const { initML, classifyJump, predictFatigue, computeExplosiveScore } = require("./ml/JumpMLEngine");
+const { detectJump: detectJumpFromStateMachine } = require("./ml/JumpDetector");
+const { recordPacketTimestamp, getEventQuality } = require("./ml/PacketQuality");
 
 const app = express();
 const server = http.createServer(app);
@@ -30,6 +33,54 @@ app.use("/api/sessions", sessionRoutes);
 /* ── Health check ── */
 app.get("/", (_req, res) => {
   res.json({ status: "ok", service: "biomech-backend" });
+});
+
+/* ── ML REST endpoint: get session-level ML analysis ── */
+app.get("/api/ml/session/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const jumps = await JumpEvent.find({ sessionId }).sort({ timestamp: 1 }).lean();
+    if (!jumps.length) return res.json({ error: "No jumps found for session" });
+
+    const heights = jumps.map(j => j.heightCm);
+    const fatigue = predictFatigue(heights);
+
+    const classified = jumps.map(j => ({
+      timestamp: j.timestamp,
+      heightCm: j.heightCm,
+      hangTimeMs: j.hangTimeMs,
+      ...classifyJump({
+        hangTimeMs: j.hangTimeMs,
+        takeoffAccelG: j.takeoffAccelG,
+        landingImpactG: j.landingImpactG,
+        twistDeg: j.twistDeg,
+      }),
+      explosiveScore: computeExplosiveScore({
+        heightCm: j.heightCm,
+        takeoffAccelG: j.takeoffAccelG,
+        hangTimeMs: j.hangTimeMs,
+      }),
+    }));
+
+    // Jump type distribution
+    const distribution = classified.reduce((acc, j) => {
+      acc[j.label] = (acc[j.label] || 0) + 1;
+      return acc;
+    }, { CMJ: 0, SJ: 0, DJ: 0 });
+
+    res.json({
+      sessionId,
+      totalJumps: jumps.length,
+      fatigue,
+      jumpTypeDistribution: distribution,
+      classifiedJumps: classified,
+      avgExplosiveScore: Math.round(
+        classified.reduce((s, j) => s + j.explosiveScore, 0) / classified.length
+      ),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /* ══════════════════════════════════════════════════════════════════
@@ -88,16 +139,9 @@ async function getCalibration(sessionId) {
    TASK 3.4 — Signal processing + jump-detection state machine
    ══════════════════════════════════════════════════════════════════ */
 
-// ── Configurable thresholds — all in G-force units ─────────────
-// Firmware sends calibrated raw int16 values (±8g range → 4096 LSB/g).
-// At rest ≈ 1.0g. Takeoff push > 1.5g. Freefall < 0.55g. Landing > 1.5g.
+// ── Signal-processing constants ─────────────────────────────────
+// Firmware sends calibrated raw int16 values (±8g range -> 4096 LSB/g).
 const LSB_PER_G = 4096.0;           // MPU-6050 ±8g range sensitivity
-const TAKEOFF_THRESHOLD_G = 1.5;    // accel mag (G) > this → TAKEOFF phase
-const FREEFALL_THRESHOLD_G = 0.55;  // accel mag (G) < this → FREEFALL (raised from 0.3 — athlete never reaches true 0g)
-const LANDING_THRESHOLD_G = 1.5;    // accel mag (G) > this → LANDING impact
-const MIN_FREEFALL_MS = 100;        // ignore micro-jumps shorter than this
-const GRAVITY_M_S2 = 9.81;
-
 const COMPLEMENTARY_FILTER_ALPHA = 0.98; // 98% gyro / 2% accel correction per step
 
 // Per-session state
@@ -114,6 +158,11 @@ function getOrCreateState(sessionId) {
     sessionState[sessionId] = {
       movingAvgWindow: [],
       jumpState: "GROUNDED",
+      baselineG: 1.0,
+      takeoffSamples: 0,
+      freefallSamples: 0,
+      landingSamples: 0,
+      cooldownUntil: 0,
       freefallStart: null,
       takeoffPeak: 0,
       landingPeak: 0,
@@ -130,6 +179,11 @@ function getOrCreateState(sessionId) {
       euler: { pitch: 0, yaw: 0, roll: 0 },
       lastFusionTime: null,
       packetCount: 0, // Task 2 tracking
+      totalPacketCount: 0,
+      droppedPacketCount: 0,
+      invalidTimestampCount: 0,
+      firstPacketTimestamp: null,
+      lastPacketTimestamp: null,
     };
   }
   return sessionState[sessionId];
@@ -180,9 +234,9 @@ function processPacket(packet, calibration, state) {
   // 2. Convert raw LSB values → G-force, then compute magnitude
   // CRITICAL FIX: firmware sends int16 LSB (±8g range = 4096 LSB/g).
   // Must divide by LSB_PER_G before comparing against G-force thresholds!
-  const accelXg = packet.accel.x / LSB_PER_G;
-  const accelYg = packet.accel.y / LSB_PER_G;
-  const accelZg = packet.accel.z / LSB_PER_G;
+  const accelXg = cAccel.x / LSB_PER_G;
+  const accelYg = cAccel.y / LSB_PER_G;
+  const accelZg = cAccel.z / LSB_PER_G;
   const rawAccelMagG = Math.sqrt(accelXg ** 2 + accelYg ** 2 + accelZg ** 2);
 
   const rawGyroMag = Math.sqrt(
@@ -234,91 +288,6 @@ function processPacket(packet, calibration, state) {
     rawGyroMag: Math.round(rawGyroMag * 10000) / 10000,
     orientation
   };
-}
-
-/**
- * Jump-detection state machine. Returns a jump event or null.
- */
-function detectJump(processedAccel, packet, cGyro, state) {
-  const timestamp = packet.timestamp;
-  switch (state.jumpState) {
-    case "GROUNDED":
-      if (processedAccel > TAKEOFF_THRESHOLD_G) {
-        state.jumpState = "TAKEOFF";
-        state.takeoffPeak = processedAccel;
-      }
-      break;
-
-    case "TAKEOFF":
-      if (processedAccel > state.takeoffPeak) {
-        state.takeoffPeak = processedAccel;
-      }
-      if (processedAccel < FREEFALL_THRESHOLD_G) {
-        state.jumpState = "FREEFALL";
-        state.freefallStart = timestamp;
-        state.twistCumX = 0;
-        state.twistCumY = 0;
-        state.twistPeak = 0;
-        state.lastGyroTime = timestamp;
-      }
-      break;
-
-    case "FREEFALL":
-      const dtSec = (timestamp - state.lastGyroTime) / 1000;
-      state.lastGyroTime = timestamp;
-      if (dtSec > 0 && dtSec < 0.1) {
-        state.twistCumX += cGyro.x * dtSec;
-        state.twistCumY += cGyro.y * dtSec;
-        const currentTwist = Math.sqrt(state.twistCumX ** 2 + state.twistCumY ** 2);
-        if (currentTwist > state.twistPeak) {
-          state.twistPeak = currentTwist;
-        }
-      }
-
-      if (processedAccel > LANDING_THRESHOLD_G) {
-        state.jumpState = "LANDING";
-        state.landingPeak = processedAccel;
-        state.landingStart = timestamp;
-        
-        const flightMs = timestamp - state.freefallStart;
-        if (flightMs >= MIN_FREEFALL_MS) {
-          const tFlightSec = flightMs / 1000;
-          const halfT = tFlightSec / 2;
-          const heightM = 0.5 * GRAVITY_M_S2 * halfT * halfT;
-          const heightCm = Math.round(heightM * 100 * 10) / 10;
-
-          state.pendingJump = { heightCm, hangTimeMs: flightMs };
-        } else {
-          state.pendingJump = null; // Too short
-        }
-      }
-      break;
-
-    case "LANDING":
-      if (processedAccel > state.landingPeak) {
-        state.landingPeak = processedAccel;
-      }
-
-      // End landing when return to ~1g or after 300ms timeout
-      if (processedAccel < 1.2 || (timestamp - state.landingStart) > 300) {
-        state.jumpState = "GROUNDED";
-        if (state.pendingJump) {
-          const jumpEvent = {
-            heightCm: state.pendingJump.heightCm,
-            hangTimeMs: state.pendingJump.hangTimeMs,
-            takeoffAccelG: state.takeoffPeak,
-            landingImpactG: state.landingPeak,
-            twistDeg: Math.round(state.twistPeak * 10) / 10,
-            timestamp: state.landingStart, // Use freefall->landing boundary
-          };
-          state.pendingJump = null;
-          return jumpEvent;
-        }
-      }
-      break;
-  }
-
-  return null;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -387,6 +356,7 @@ io.on("connection", (socket) => {
       }
 
       // ── Signal processing (Task 3.4 & 4) ───────────────────────
+      if (!recordPacketTimestamp(state, packet.timestamp)) return;
       const { calibratedAccel, calibratedGyro, processedAccel, rawAccelMagG, rawGyroMag, orientation } =
         processPacket(packet, calibration, state);
 
@@ -399,6 +369,7 @@ io.on("connection", (socket) => {
         timestamp: packet.timestamp,
         accel: packet.accel, // keep raw accel for reference
         gyro: packet.gyro,
+        packetVersion: packet.v ?? 1,
         battery: packet.battery ?? null,
         processedAccel,
       };
@@ -451,10 +422,48 @@ io.on("connection", (socket) => {
       } else {
         // Use rawAccelMagG (G-force, unsmoothed) for jump detection so the sharp
         // freefall dip and landing spike aren't averaged away by the display filter.
-        const jump = detectJump(rawAccelMagG, packet, calibratedGyro, state);
+        const jump = detectJumpFromStateMachine(rawAccelMagG, packet, calibratedGyro, state);
         if (jump) {
           console.log(
             `🦘  Jump detected! ${jump.heightCm} cm @ session ${sessionId.slice(0, 8)}…`
+          );
+
+          const quality = getEventQuality(state);
+          const mlClass = quality.valid
+            ? classifyJump({
+              heightCm:       jump.heightCm,
+                hangTimeMs:     jump.hangTimeMs,
+                takeoffAccelG:  jump.takeoffAccelG,
+                landingImpactG: jump.landingImpactG,
+                twistDeg:       jump.twistDeg,
+              })
+            : {
+                label: "Unknown",
+                confidence: 0,
+                scores: { CMJ: 0, SJ: 0, DJ: 0 },
+              };
+          const explosiveScore = quality.valid
+            ? computeExplosiveScore({
+                heightCm:       jump.heightCm,
+                takeoffAccelG:  jump.takeoffAccelG,
+                hangTimeMs:     jump.hangTimeMs,
+              })
+            : 0;
+
+          // Only valid events contribute to fatigue metrics.
+          if (!state.sessionJumps) state.sessionJumps = [];
+          if (quality.valid) {
+            state.sessionJumps.push({
+              heightCm: jump.heightCm,
+              takeoffAccelG: jump.takeoffAccelG,
+              landingImpactG: jump.landingImpactG,
+            });
+          }
+          const fatigue = predictFatigue(state.sessionJumps);
+
+          console.log(
+            `[ML] 🤖 Jump classified as ${mlClass.label} (${mlClass.confidence}% confidence) | ` +
+            `Explosive: ${explosiveScore}/100 | Fatigue: ${(fatigue.fatigueScore * 100).toFixed(0)}%`
           );
           
           // 1. Insert JumpEvent
@@ -465,7 +474,11 @@ io.on("connection", (socket) => {
             hangTimeMs: jump.hangTimeMs,
             landingImpactG: jump.landingImpactG,
             takeoffAccelG: jump.takeoffAccelG,
-            twistDeg: jump.twistDeg
+            twistDeg: jump.twistDeg,
+            ...quality,
+            mlLabel: mlClass.label,
+            mlConfidence: mlClass.confidence,
+            explosiveScore,
           }).catch(err => console.error("Error saving JumpEvent:", err.message));
 
           // 2. Update parent Session
@@ -481,7 +494,7 @@ io.on("connection", (socket) => {
                 maxTwistDeg: jump.twistDeg
               }
             },
-            { new: true } // ensures return of updated document though not strictly needed here
+            { new: true }
           ).catch(err => console.error("Error updating Session:", err.message));
 
           // 3. Emit jump_detected event
@@ -492,7 +505,23 @@ io.on("connection", (socket) => {
             hangTimeMs: jump.hangTimeMs,
             landingImpactG: jump.landingImpactG,
             takeoffAccelG: jump.takeoffAccelG,
-            twistDeg: jump.twistDeg
+            twistDeg: jump.twistDeg,
+            ...quality,
+            mlLabel: mlClass.label,
+            mlConfidence: mlClass.confidence,
+            mlScores: mlClass.scores,
+            explosiveScore,
+          });
+
+          // 4. Emit ML insight event (fatigue + live classification)
+          io.emit("ml_insight", {
+            sessionId,
+            jumpType:       mlClass.label,
+            confidence:     mlClass.confidence,
+            scores:         mlClass.scores,
+            explosiveScore,
+            fatigue,
+            timestamp:      jump.timestamp,
           });
         }
       }
@@ -509,6 +538,9 @@ io.on("connection", (socket) => {
 /* ── Start ── */
 async function start() {
   await connectDB();
+
+  // Initialise ML engine (trains neural net — completes in <200ms)
+  initML();
 
   // Task 2: Emit stream_stats every 1000ms
   setInterval(() => {

@@ -189,11 +189,21 @@ router.post("/:sessionId/calibrate", async (req, res) => {
     }
 
     const n = samples.length;
+    const accelMean = {
+      x: sum.accel.x / n,
+      y: sum.accel.y / n,
+      z: sum.accel.z / n,
+    };
+    const gravityRaw = 4096;
+    const dominantAxis = Object.keys(accelMean).reduce((axis, candidate) =>
+      Math.abs(accelMean[candidate]) > Math.abs(accelMean[axis]) ? candidate : axis
+    , 'x');
+    const expectedGravity = Math.sign(accelMean[dominantAxis] || 1) * gravityRaw;
     const calibrationOffset = {
       accel: {
-        x: sum.accel.x / n,
-        y: sum.accel.y / n,
-        z: sum.accel.z / n,
+        x: accelMean.x - (dominantAxis === "x" ? expectedGravity : 0),
+        y: accelMean.y - (dominantAxis === "y" ? expectedGravity : 0),
+        z: accelMean.z - (dominantAxis === "z" ? expectedGravity : 0),
       },
       gyro: {
         x: sum.gyro.x / n,
